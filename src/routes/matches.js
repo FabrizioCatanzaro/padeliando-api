@@ -22,11 +22,11 @@ router.post('/', async (req, res, next) => {
     const [match] = await sql`
       INSERT INTO matches
         (id, tournament_id, team1_p1, team1_p2, team2_p1, team2_p2,
-         score1, score2, played_at)
+         score1, score2, played_at, duration_seconds)
       VALUES
         (${uid()}, ${tournamentId},
          ${team1[0]}, ${team1[1]}, ${team2[0]}, ${team2[1]},
-         ${score1}, ${score2}, ${playedAt ?? today})
+         ${score1}, ${score2}, ${playedAt ?? today}, ${duration_seconds})
       RETURNING *
     `;
     res.status(201).json(match);
@@ -43,7 +43,8 @@ router.put('/:id', async (req, res, next) => {
         team1_p1  = ${team1[0]}, team1_p2 = ${team1[1]},
         team2_p1  = ${team2[0]}, team2_p2 = ${team2[1]},
         score1    = ${score1},   score2   = ${score2},
-        played_at = ${playedAt}
+        played_at = ${playedAt},
+        duration_seconds = ${duration_seconds}
       WHERE id = ${req.params.id} RETURNING *
     `;
     if (!match) return res.status(404).json({ error: 'Partido no encontrado' });
