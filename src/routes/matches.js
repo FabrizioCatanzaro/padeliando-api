@@ -7,7 +7,7 @@ const router = Router();
 // POST /api/matches
 router.post('/', async (req, res, next) => {
   try {
-    const { tournamentId, team1, team2, score1, score2, playedAt } = req.body;
+    const { tournamentId, team1, team2, score1, score2, playedAt, duration_seconds } = req.body;
  
     if (!tournamentId || !team1?.[0] || !team1?.[1] || !team2?.[0] || !team2?.[1]) {
       return res.status(400).json({ error: 'Datos incompletos' });
@@ -36,7 +36,7 @@ router.post('/', async (req, res, next) => {
 // PUT /api/matches/:id
 router.put('/:id', async (req, res, next) => {
   try {
-    const { team1, team2, score1, score2, playedAt } = req.body;
+    const { team1, team2, score1, score2, playedAt, duration_seconds } = req.body;
     const sql = getDb();
     const [match] = await sql`
       UPDATE matches SET
