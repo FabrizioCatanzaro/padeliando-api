@@ -19,16 +19,11 @@ router.get('/:id', async (req, res, next) => {
       SELECT * FROM matches WHERE tournament_id = ${id} ORDER BY created_at DESC
     `;
  
-    const playerIds = [
-      ...new Set([
-        ...pairs.flatMap((p) => [p.p1_id, p.p2_id]),
-        ...matches.flatMap((m) => [m.team1_p1, m.team1_p2, m.team2_p1, m.team2_p2]),
-      ]),
-    ];
- 
-    const players = playerIds.length
-      ? await sql`SELECT * FROM players WHERE id = ANY(${playerIds})`
-      : [];
+    const players = await sql`
+      SELECT p.* FROM players p
+      INNER JOIN group_players gp ON gp.player_id = p.id
+      WHERE gp.group_id = ${tournament.group_id}
+    `;
  
     res.json({ ...tournament, players, pairs, matches });
   } catch (err) { next(err); }

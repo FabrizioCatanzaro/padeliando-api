@@ -15,7 +15,10 @@ const PORT = process.env.PORT ?? 3001;
 // Middlewares
 app.use(cors({ origin: process.env.CORS_ORIGIN ?? '*' }));
 app.use(express.json());
-
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
 // Rutas
 app.use('/api/groups',      groupsRouter);
 app.use('/api/players',     playersRouter);
@@ -34,5 +37,5 @@ app.use((err, _req, res, _next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🎾 Padeliando API corriendo en http://localhost:${PORT}`);
+  console.log(`🎾 Padeliando API corriendo en ${process.env.BACK_URL ? process.env.BACK_URL : `http://localhost:${PORT}`}`);
 });
