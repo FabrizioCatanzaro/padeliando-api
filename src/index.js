@@ -8,6 +8,7 @@ import tournamentsRouter from './routes/tournaments.js';
 import matchesRouter     from './routes/matches.js';
 import pairsRouter       from './routes/pairs.js';
 import readonlyRouter    from './routes/readonly.js';
+import authRouter from './routes/auth.js';
 
 const app  = express();
 const PORT = process.env.PORT ?? 3001;
@@ -26,6 +27,7 @@ app.use('/api/tournaments', tournamentsRouter);
 app.use('/api/matches',     matchesRouter);
 app.use('/api/pairs',       pairsRouter);
 app.use('/api/readonly',    readonlyRouter);
+app.use('/api/auth', authRouter);
 
 // Health check
 app.get('/health', (_req, res) => res.json({ ok: true }));
