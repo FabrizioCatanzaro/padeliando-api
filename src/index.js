@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express  from 'express';
 import cors     from 'cors';
+import cookieParser from 'cookie-parser';
+import rateLimit from 'express-rate-limit';
 
 import groupsRouter      from './routes/groups.js';
 import playersRouter     from './routes/players.js';
@@ -13,13 +15,35 @@ import authRouter from './routes/auth.js';
 const app  = express();
 const PORT = process.env.PORT ?? 3001;
 
+// Rate limiter para login (5 intentos por IP cada 15 minutos)
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 5,
+  message: { error: 'Demasiados intentos de login. Intenta en 15 minutos.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    // Combinar IP con email para rate limit más granular
+    const email = req.body?.email || 'unknown';
+    return `${req.ip}:${email}`;
+  },
+  skip: (req) => req.method !== 'POST' // Solo aplicar a POST
+});
+
 // Middlewares
-app.use(cors({ origin: process.env.CORS_ORIGIN ?? '*' }));
+app.use(cors({ 
+  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  credentials: true // Permitir cookies cross-origin
+}));
+app.use(cookieParser());
 app.use(express.json());
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store');
   next();
 });
+
+// Aplicar rate limiter solo a login
+app.use('/api/auth/login', loginLimiter);
 // Rutas
 app.use('/api/groups',      groupsRouter);
 app.use('/api/players',     playersRouter);
