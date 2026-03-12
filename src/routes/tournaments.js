@@ -85,12 +85,13 @@ router.post('/', async (req, res, next) => {
 router.patch('/:id', async (req, res, next) => {
   try {
     const { id }           = req.params;
-    const { name, status } = req.body;
+    const { name, status, mode } = req.body;
     const sql = getDb();
     const [updated] = await sql`
       UPDATE tournaments
       SET name   = COALESCE(${name   ?? null}, name),
-          status = COALESCE(${status ?? null}, status)
+          status = COALESCE(${status ?? null}, status),
+          mode   = COALESCE(${mode   ?? null}, mode)
       WHERE id = ${id} RETURNING *
     `;
     if (!updated) return res.status(404).json({ error: 'Torneo no encontrado' });
