@@ -50,7 +50,9 @@ router.post('/', async (req, res, next) => {
     } = req.body;
  
     if (!groupId)      return res.status(400).json({ error: 'groupId requerido' });
-    if (!name?.trim()) return res.status(400).json({ error: 'name requerido' });
+    if (!name?.trim()) return res.status(400).json({ error: 'nombre requerido' });
+    if (name.trim().length < 2) return res.status(400).json({ error: 'El nombre la jornada tiene que tener mas de 2 caracteres' });
+    if (name.trim().length > 30) return res.status(400).json({ error: 'El nombre la jornada no puede superar los 30 caracteres' });
  
     const sql  = getDb();
     const tId  = uid();
@@ -102,6 +104,8 @@ router.patch('/:id', async (req, res, next) => {
   try {
     const { id }           = req.params;
     const { name, status, mode } = req.body;
+    if (name !== undefined && name.trim().length > 30) return res.status(400).json({ error: 'El nombre la jornada no puede superar los 30 caracteres' });
+    if (name !== undefined && name.trim().length < 2) return res.status(400).json({ error: 'El nombre la jornada debe superar los 2 caracteres' });
     const sql = getDb();
     const [updated] = await sql`
       UPDATE tournaments

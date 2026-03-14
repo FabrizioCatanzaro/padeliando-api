@@ -142,12 +142,14 @@ router.get('/:groupId', async (req, res, next) => {
 // POST /api/groups — requiere auth
 router.post('/', requireAuth, async (req, res, next) => {
   try {
-    const { name, description, is_public = true } = req.body;
+    const { name, description, is_public = true, emojis = [] } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'name requerido' });
+    if (name.trim().length > 30) return res.status(400).json({ error: 'El nombre del torneo no puede superar los 30 caracteres' });
+    if (name.trim().length < 2) return res.status(400).json({ error: 'El nombre del torneo debe tener mas de 2 caracteres' });
     const sql = getDb();
     const [group] = await sql`
-      INSERT INTO groups (id, name, description, user_id, is_public)
-      VALUES (${uid()}, ${name.trim()}, ${description ?? null}, ${req.user.id}, ${is_public})
+      INSERT INTO groups (id, name, description, user_id, is_public, emojis)
+      VALUES (${uid()}, ${name.trim()}, ${description ?? null}, ${req.user.id}, ${is_public}, ${emojis})
       RETURNING *
     `;
     res.status(201).json(group);
@@ -157,7 +159,9 @@ router.post('/', requireAuth, async (req, res, next) => {
 // PUT /api/groups/:groupId — solo el dueño
 router.put('/:groupId', requireAuth, async (req, res, next) => {
   try {
-    const { name, description, is_public } = req.body;
+    const { name, description, is_public, emojis } = req.body;
+    if (name !== undefined && name.trim().length > 30) return res.status(400).json({ error: 'El nombre del torneo no puede superar los 30 caracteres' });
+    if (name !== undefined && name.trim().length < 2) return res.status(400).json({ error: 'El nombre del torneo debe tener mas de 2 caracteres' });
     const sql = getDb();
     const [group] = await sql`SELECT user_id FROM groups WHERE id = ${req.params.groupId}`;
     if (!group) return res.status(404).json({ error: 'Grupo no encontrado' });
@@ -167,7 +171,8 @@ router.put('/:groupId', requireAuth, async (req, res, next) => {
       UPDATE groups
       SET name = COALESCE(${name ?? null}, name),
           description = COALESCE(${description ?? null}, description),
-          is_public = COALESCE(${is_public ?? null}, is_public)
+          is_public = COALESCE(${is_public ?? null}, is_public),
+          emojis = COALESCE(${emojis ?? null}, emojis)
       WHERE id = ${req.params.groupId} RETURNING *
     `;
     res.json(updated);
