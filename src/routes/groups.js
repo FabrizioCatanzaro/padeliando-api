@@ -23,6 +23,30 @@ router.get('/', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/groups/participating — grupos ajenos donde el usuario tiene un player vinculado (invitación aceptada)
+router.get('/participating', requireAuth, async (req, res, next) => {
+  try {
+    const sql = getDb();
+    const groups = await sql`
+      SELECT g.*,
+        u.username AS owner_username,
+        u.name     AS owner_name,
+        COUNT(DISTINCT all_gp.player_id)::int AS player_count,
+        COUNT(DISTINCT t.id)::int              AS tournament_count
+      FROM groups g
+      JOIN users u ON u.id = g.user_id
+      JOIN group_players user_gp ON user_gp.group_id = g.id
+      JOIN players p ON p.id = user_gp.player_id AND p.user_id = ${req.user.id}
+      LEFT JOIN group_players all_gp ON all_gp.group_id = g.id
+      LEFT JOIN tournaments t ON t.group_id = g.id
+      WHERE g.user_id != ${req.user.id}
+      GROUP BY g.id, u.username, u.name
+      ORDER BY g.created_at DESC
+    `;
+    res.json(groups);
+  } catch (err) { next(err); }
+});
+
 // GET /api/groups/user/:username — perfil público de otro usuario
 router.get('/user/:username', optionalAuth, async (req, res, next) => {
   try {
@@ -54,7 +78,12 @@ router.get('/:groupId', async (req, res, next) => {
     const { groupId } = req.params;
     const sql = getDb();
 
-    const [group] = await sql`SELECT * FROM groups WHERE id = ${groupId}`;
+    const [group] = await sql`
+      SELECT g.*, u.username AS owner_username, u.name AS owner_name
+      FROM groups g
+      JOIN users u ON u.id = g.user_id
+      WHERE g.id = ${groupId}
+    `;
     if (!group) return res.status(404).json({ error: 'Grupo no encontrado' });
 
     const tournaments = await sql`

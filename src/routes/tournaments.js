@@ -19,9 +19,20 @@ router.get('/:id', async (req, res, next) => {
       SELECT * FROM matches WHERE tournament_id = ${id} ORDER BY created_at DESC
     `;
  
+    // Incluir info de vinculación: usuario registrado + invitación pendiente si aplica
     const players = await sql`
-      SELECT p.* FROM players p
+      SELECT
+        p.*,
+        u.username   AS linked_username,
+        u.name       AS linked_name,
+        pi.id        AS invitation_id,
+        pi.status    AS invitation_status,
+        pi.invited_identifier
+      FROM players p
       INNER JOIN group_players gp ON gp.player_id = p.id
+      LEFT JOIN users u ON u.id = p.user_id
+      LEFT JOIN player_invitations pi
+        ON pi.player_id = p.id AND pi.group_id = ${tournament.group_id} AND pi.status = 'pending'
       WHERE gp.group_id = ${tournament.group_id}
     `;
  
@@ -44,10 +55,15 @@ router.post('/', async (req, res, next) => {
     const sql  = getDb();
     const tId  = uid();
  
-    // Resolver jugadores
+    // Resolver jugadores: busca dentro del grupo, no globalmente.
+    // Así dos grupos pueden tener su propio "Pepe" sin conflicto.
     const players = [];
     for (const rawName of playerNames.filter(Boolean)) {
-      let [player] = await sql`SELECT * FROM players WHERE LOWER(name) = LOWER(${rawName.trim()})`;
+      let [player] = await sql`
+        SELECT p.* FROM players p
+        JOIN group_players gp ON gp.player_id = p.id
+        WHERE gp.group_id = ${groupId} AND LOWER(p.name) = LOWER(${rawName.trim()})
+      `;
       if (!player) {
         [player] = await sql`
           INSERT INTO players (id, name) VALUES (${uid()}, ${rawName.trim()}) RETURNING *
