@@ -7,9 +7,12 @@ CREATE TABLE IF NOT EXISTS groups (
 );
  
 -- Registro global de jugadores
+-- name ya NO es UNIQUE globalmente: dos grupos distintos pueden tener su propio "Pepe"
+-- user_id vincula el slot a un usuario registrado (se llena cuando acepta una invitación)
 CREATE TABLE IF NOT EXISTS players (
   id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL UNIQUE,
+  name       TEXT NOT NULL,
+  user_id    TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
  
@@ -53,8 +56,23 @@ CREATE TABLE IF NOT EXISTS matches (
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
  
+-- Invitaciones: el dueño del grupo invita a un usuario registrado a reclamar un slot de jugador
+CREATE TABLE IF NOT EXISTS player_invitations (
+  id                 TEXT PRIMARY KEY,
+  player_id          TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  group_id           TEXT NOT NULL REFERENCES groups(id)  ON DELETE CASCADE,
+  invited_by         TEXT NOT NULL REFERENCES users(id),
+  invited_identifier TEXT NOT NULL,          -- el @username o email que se ingresó
+  invited_user_id    TEXT REFERENCES users(id) ON DELETE CASCADE,
+  status             TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'accepted', 'rejected')),
+  created_at         TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Índices
-CREATE INDEX IF NOT EXISTS idx_tournaments_group  ON tournaments(group_id);
-CREATE INDEX IF NOT EXISTS idx_matches_tournament ON matches(tournament_id);
-CREATE INDEX IF NOT EXISTS idx_pairs_tournament   ON pairs(tournament_id);
-CREATE INDEX IF NOT EXISTS idx_gp_group           ON group_players(group_id);
+CREATE INDEX IF NOT EXISTS idx_tournaments_group     ON tournaments(group_id);
+CREATE INDEX IF NOT EXISTS idx_matches_tournament    ON matches(tournament_id);
+CREATE INDEX IF NOT EXISTS idx_pairs_tournament      ON pairs(tournament_id);
+CREATE INDEX IF NOT EXISTS idx_gp_group              ON group_players(group_id);
+CREATE INDEX IF NOT EXISTS idx_invitations_user      ON player_invitations(invited_user_id);
+CREATE INDEX IF NOT EXISTS idx_invitations_player    ON player_invitations(player_id);
