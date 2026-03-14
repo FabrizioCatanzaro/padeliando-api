@@ -31,7 +31,7 @@ function cookieOpts(maxAge) {
   return {
     httpOnly: true,
     secure:   IS_PROD,
-    sameSite: 'strict',
+    sameSite: IS_PROD ? 'none' : 'lax',
     maxAge,
   };
 }
