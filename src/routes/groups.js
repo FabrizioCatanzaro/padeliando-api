@@ -72,6 +72,38 @@ router.get('/user/:username', optionalAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/groups/:groupId/history — estadísticas históricas de todas las jornadas
+router.get('/:groupId/history', async (req, res, next) => {
+  try {
+    const { groupId } = req.params;
+    const sql = getDb();
+
+    const tournaments = await sql`
+      SELECT id, name, created_at, status, mode
+      FROM   tournaments
+      WHERE  group_id = ${groupId}
+      ORDER  BY created_at ASC
+    `;
+
+    const result = [];
+    for (const t of tournaments) {
+      const players = await sql`
+        SELECT p.id, p.name FROM players p
+        JOIN tournament_players tp ON tp.player_id = p.id AND tp.tournament_id = ${t.id}
+      `;
+      const matches = await sql`
+        SELECT * FROM matches WHERE tournament_id = ${t.id} ORDER BY created_at DESC
+      `;
+      const pairs = await sql`
+        SELECT * FROM pairs WHERE tournament_id = ${t.id}
+      `;
+      result.push({ ...t, players, matches, pairs });
+    }
+
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
 // GET /api/groups/:groupId
 router.get('/:groupId', async (req, res, next) => {
   try {
@@ -94,6 +126,70 @@ router.get('/:groupId', async (req, res, next) => {
       GROUP  BY t.id
       ORDER  BY t.created_at DESC
     `;
+
+    // ── Ganador por jornada finalizada ──────────────────────────────────────
+    const finishedIds = tournaments.filter((t) => t.status === 'finished').map((t) => t.id);
+    if (finishedIds.length > 0) {
+      const wins = await sql`
+        SELECT tournament_id, player_id,
+               SUM(won)::int AS wins, SUM(diff)::int AS gdiff
+        FROM (
+          SELECT tournament_id, team1_p1 AS player_id,
+                 (CASE WHEN score1 > score2 THEN 1 ELSE 0 END) AS won, score1 - score2 AS diff
+          FROM matches WHERE tournament_id = ANY(${finishedIds})
+          UNION ALL
+          SELECT tournament_id, team1_p2,
+                 (CASE WHEN score1 > score2 THEN 1 ELSE 0 END), score1 - score2
+          FROM matches WHERE tournament_id = ANY(${finishedIds}) AND team1_p2 IS NOT NULL
+          UNION ALL
+          SELECT tournament_id, team2_p1,
+                 (CASE WHEN score2 > score1 THEN 1 ELSE 0 END), score2 - score1
+          FROM matches WHERE tournament_id = ANY(${finishedIds})
+          UNION ALL
+          SELECT tournament_id, team2_p2,
+                 (CASE WHEN score2 > score1 THEN 1 ELSE 0 END), score2 - score1
+          FROM matches WHERE tournament_id = ANY(${finishedIds}) AND team2_p2 IS NOT NULL
+        ) sub WHERE player_id IS NOT NULL
+        GROUP BY tournament_id, player_id
+      `;
+
+      const playerIds = [...new Set(wins.map((w) => w.player_id))];
+      const pNames = playerIds.length
+        ? await sql`SELECT id, name FROM players WHERE id = ANY(${playerIds})`
+        : [];
+      const nameById = Object.fromEntries(pNames.map((p) => [p.id, p.name]));
+
+      const pairsModeIds = tournaments
+        .filter((t) => t.status === 'finished' && t.mode === 'pairs')
+        .map((t) => t.id);
+      const allPairs = pairsModeIds.length
+        ? await sql`SELECT * FROM pairs WHERE tournament_id = ANY(${pairsModeIds})`
+        : [];
+
+      const winsByT = {};
+      wins.forEach((w) => { (winsByT[w.tournament_id] ??= []).push(w); });
+
+      for (const t of tournaments) {
+        if (t.status !== 'finished') continue;
+        const tWins = winsByT[t.id] ?? [];
+        if (!tWins.length) continue;
+        const maxW    = Math.max(...tWins.map((w) => w.wins));
+        const topByW  = tWins.filter((w) => w.wins === maxW);
+        const maxD    = Math.max(...topByW.map((w) => w.gdiff));
+        const topList = topByW.filter((w) => w.gdiff === maxD);
+        const topIds  = new Set(topList.map((w) => w.player_id));
+
+        if (t.mode === 'pairs') {
+          const tPairs      = allPairs.filter((p) => p.tournament_id === t.id);
+          const winnerPairs = tPairs.filter((p) => topIds.has(p.p1_id) && topIds.has(p.p2_id));
+          t.winner_label = winnerPairs.length
+            ? winnerPairs.map((p) => `${nameById[p.p1_id] ?? '?'} & ${nameById[p.p2_id] ?? '?'}`).join(' / ')
+            : topList.map((w) => nameById[w.player_id] ?? '?').join(' / ');
+        } else {
+          t.winner_label = topList.map((w) => nameById[w.player_id] ?? '?').join(' / ');
+        }
+      }
+    }
 
     const playerStats = await sql`
       SELECT
