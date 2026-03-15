@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express     from 'express';
 import cors        from 'cors';
 import cookieParser from 'cookie-parser';
+import morgan      from 'morgan';
 
 import groupsRouter      from './routes/groups.js';
 import playersRouter     from './routes/players.js';
@@ -11,6 +12,7 @@ import pairsRouter       from './routes/pairs.js';
 import readonlyRouter    from './routes/readonly.js';
 import authRouter        from './routes/auth.js';
 import invitationsRouter from './routes/invitations.js';
+import { getDb } from './db.js';
 
 const app  = express();
 const PORT = process.env.PORT ?? 3001;
@@ -26,6 +28,7 @@ app.use(cors({
   credentials: true,   // ← necesario para enviar/recibir cookies cross-origin
 }));
 
+app.use(morgan('dev'));
 app.use(cookieParser());
 app.use(express.json());
 app.use((req, res, next) => {
@@ -49,6 +52,13 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: err.message ?? 'Error interno' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Padeliando API en puerto ${PORT}`);
+app.listen(PORT, async () => {
+  console.log(`Padeleando API en puerto ${PORT}`);
+    try {
+      const sql = getDb();
+      await sql`SELECT 1`;
+      console.log('DB conectada');
+    } catch (err) {
+      console.error('Error conectando a DB:', err.message);
+    }
 });
