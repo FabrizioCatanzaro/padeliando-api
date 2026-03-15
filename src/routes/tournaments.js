@@ -20,6 +20,7 @@ router.get('/:id', async (req, res, next) => {
     `;
  
     // Incluir info de vinculación: usuario registrado + invitación pendiente si aplica
+    // Solo jugadores explícitamente agregados a esta jornada (tournament_players)
     const players = await sql`
       SELECT
         p.*,
@@ -29,11 +30,10 @@ router.get('/:id', async (req, res, next) => {
         pi.status    AS invitation_status,
         pi.invited_identifier
       FROM players p
-      INNER JOIN group_players gp ON gp.player_id = p.id
+      INNER JOIN tournament_players tp ON tp.player_id = p.id AND tp.tournament_id = ${id}
       LEFT JOIN users u ON u.id = p.user_id
       LEFT JOIN player_invitations pi
         ON pi.player_id = p.id AND pi.group_id = ${tournament.group_id} AND pi.status = 'pending'
-      WHERE gp.group_id = ${tournament.group_id}
     `;
  
     res.json({ ...tournament, players, pairs, matches });
@@ -76,12 +76,20 @@ router.post('/', async (req, res, next) => {
       `;
       players.push(player);
     }
- 
+
     const [tournament] = await sql`
         INSERT INTO tournaments (id, group_id, name, mode)
         VALUES (${tId}, ${groupId}, ${name.trim()}, ${mode})
       RETURNING *`;
- 
+
+    // Vincular cada jugador a esta jornada específica
+    for (const player of players) {
+      await sql`
+        INSERT INTO tournament_players (tournament_id, player_id)
+        VALUES (${tId}, ${player.id}) ON CONFLICT DO NOTHING
+      `;
+    }
+
     // Crear parejas fijas si modo=pairs
     const pairs = [];
     for (const { p1Name, p2Name } of pairsInput) {
