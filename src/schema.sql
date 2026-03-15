@@ -69,7 +69,16 @@ CREATE TABLE IF NOT EXISTS player_invitations (
   created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Jugadores por jornada (torneo)
+CREATE TABLE IF NOT EXISTS tournament_players (
+  tournament_id TEXT REFERENCES tournaments(id) ON DELETE CASCADE,
+  player_id     TEXT REFERENCES players(id)     ON DELETE CASCADE,
+  added_at      TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (tournament_id, player_id)
+);
+
 -- Índices
+CREATE INDEX IF NOT EXISTS idx_tp_tournament         ON tournament_players(tournament_id);
 CREATE INDEX IF NOT EXISTS idx_tournaments_group     ON tournaments(group_id);
 CREATE INDEX IF NOT EXISTS idx_matches_tournament    ON matches(tournament_id);
 CREATE INDEX IF NOT EXISTS idx_pairs_tournament      ON pairs(tournament_id);
