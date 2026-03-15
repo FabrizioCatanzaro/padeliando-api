@@ -10,7 +10,11 @@ router.get('/:tournamentId', async (req, res, next) => {
     const { tournamentId } = req.params;
  
     const [tournament] = await sql`
-      SELECT * FROM tournaments WHERE id = ${tournamentId}
+      SELECT t.*, u.username AS owner_username
+      FROM   tournaments t
+      JOIN   groups g ON g.id = t.group_id
+      JOIN   users  u ON u.id = g.user_id
+      WHERE  t.id = ${tournamentId}
     `;
     if (!tournament) return res.status(404).json({ error: 'Torneo no encontrado' });
  
@@ -22,22 +26,35 @@ router.get('/:tournamentId', async (req, res, next) => {
       ORDER BY created_at DESC
     `;
  
-    const playerIds = [
+    // Canonical player list from tournament_players table
+    const tpPlayers = await sql`
+      SELECT p.id, p.name FROM players p
+      INNER JOIN tournament_players tp ON tp.player_id = p.id AND tp.tournament_id = ${tournamentId}
+    `;
+
+    // Backward-compat: also include any players from matches/pairs not in tournament_players
+    const tpIds = new Set(tpPlayers.map((p) => p.id));
+    const extraIds = [
       ...new Set([
         ...pairs.flatMap((p) => [p.p1_id, p.p2_id]),
         ...matches.flatMap((m) => [m.team1_p1, m.team1_p2, m.team2_p1, m.team2_p2]),
       ]),
-    ];
+    ].filter((id) => id && !tpIds.has(id));
 
-        const players = playerIds.length
-      ? await sql`SELECT id, name FROM players WHERE id = ANY(${playerIds})`
+    const extraPlayers = extraIds.length
+      ? await sql`SELECT id, name FROM players WHERE id = ANY(${extraIds})`
       : [];
+
+    const players = [...tpPlayers, ...extraPlayers];
  
     res.json({
-      id:         tournament.id,
-      name:       tournament.name,
-      mode:       tournament.mode,
-      created_at: tournament.created_at,
+      id:             tournament.id,
+      name:           tournament.name,
+      mode:           tournament.mode,
+      status:         tournament.status,
+      group_id:       tournament.group_id,
+      owner_username: tournament.owner_username,
+      created_at:     tournament.created_at,
       players,
       pairs,
       matches,
