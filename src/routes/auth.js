@@ -41,12 +41,12 @@ function setAuthCookies(res, user) {
   const accessToken = jwt.sign(
     { id: user.id, email: user.email, name: user.name, username: user.username },
     SECRET,
-    { expiresIn: '15m' }
+    { expiresIn: '1h' }
   );
   // Refresh token: larga duración (30 días), opaco
   const refreshToken = crypto.randomBytes(40).toString('hex');
 
-  res.cookie('access_token',  accessToken,  cookieOpts(15 * 60 * 1000));
+  res.cookie('access_token',  accessToken,  cookieOpts(60 * 60 * 1000));
   res.cookie('refresh_token', refreshToken, cookieOpts(30 * 24 * 60 * 60 * 1000));
 
   return refreshToken;
@@ -363,7 +363,7 @@ router.post('/reset-password', async (req, res, next) => {
 // ── PATCH /api/auth/me ────────────────────────────────────────────
 router.patch('/me', requireAuth, async (req, res, next) => {
   try {
-    const { name, current_password, new_password } = req.body;
+    const { name, username, current_password, new_password } = req.body;
     const sql = getDb();
 
     const [user] = await sql`SELECT * FROM users WHERE id = ${req.user.id}`;
@@ -371,14 +371,25 @@ router.patch('/me', requireAuth, async (req, res, next) => {
 
     const updates = {};
 
-    // Cambio de nombre
+    // Cambio de nombre (no regenera el username)
     if (name !== undefined) {
       const trimmed = name.trim();
-      const userError = validateUser(name)
+      const userError = validateUser(trimmed);
       if (userError) return res.status(400).json({ error: userError });
       if (!trimmed) return res.status(400).json({ error: 'El nombre no puede estar vacío' });
       updates.name = trimmed;
-      updates.username = await generateUsername(sql, trimmed, req.user.id);
+    }
+
+    // Cambio de username independiente
+    if (username !== undefined) {
+      const trimmed = username.trim().toLowerCase();
+      if (!trimmed) return res.status(400).json({ error: 'El nombre de usuario no puede estar vacío' });
+      if (trimmed.length < 3) return res.status(400).json({ error: 'El nombre de usuario debe tener al menos 3 caracteres' });
+      if (trimmed.length > 20) return res.status(400).json({ error: 'El nombre de usuario tiene un límite de 20 caracteres' });
+      if (!/^[a-z0-9_]+$/.test(trimmed)) return res.status(400).json({ error: 'El nombre de usuario solo puede contener letras, números y guiones bajos' });
+      const [existing] = await sql`SELECT id FROM users WHERE username = ${trimmed} AND id != ${req.user.id}`;
+      if (existing) return res.status(409).json({ error: 'Ese nombre de usuario ya está en uso' });
+      updates.username = trimmed;
     }
 
     // Cambio de contraseña
