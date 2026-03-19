@@ -10,13 +10,13 @@ router.get('/', requireAuth, async (req, res, next) => {
     const sql = getDb();
     const groups = await sql`
       SELECT g.*,
-        COUNT(DISTINCT gp.player_id)::int AS player_count,
-        COUNT(DISTINCT t.id)::int          AS tournament_count
+        (SELECT COUNT(DISTINCT tp.player_id)::int
+         FROM tournament_players tp
+         JOIN tournaments t ON t.id = tp.tournament_id
+         WHERE t.group_id = g.id) AS player_count,
+        (SELECT COUNT(*)::int FROM tournaments t WHERE t.group_id = g.id) AS tournament_count
       FROM groups g
-      LEFT JOIN group_players gp ON gp.group_id = g.id
-      LEFT JOIN tournaments   t  ON t.group_id  = g.id
       WHERE g.user_id = ${req.user.id}
-      GROUP BY g.id
       ORDER BY g.created_at DESC
     `;
     res.json(groups);
@@ -31,16 +31,19 @@ router.get('/participating', requireAuth, async (req, res, next) => {
       SELECT g.*,
         u.username AS owner_username,
         u.name     AS owner_name,
-        COUNT(DISTINCT all_gp.player_id)::int AS player_count,
-        COUNT(DISTINCT t.id)::int              AS tournament_count
+        (SELECT COUNT(DISTINCT tp.player_id)::int
+         FROM tournament_players tp
+         JOIN tournaments t ON t.id = tp.tournament_id
+         WHERE t.group_id = g.id) AS player_count,
+        (SELECT COUNT(*)::int FROM tournaments t WHERE t.group_id = g.id) AS tournament_count
       FROM groups g
       JOIN users u ON u.id = g.user_id
-      JOIN group_players user_gp ON user_gp.group_id = g.id
-      JOIN players p ON p.id = user_gp.player_id AND p.user_id = ${req.user.id}
-      LEFT JOIN group_players all_gp ON all_gp.group_id = g.id
-      LEFT JOIN tournaments t ON t.group_id = g.id
       WHERE g.user_id != ${req.user.id}
-      GROUP BY g.id, u.username, u.name
+        AND EXISTS (
+          SELECT 1 FROM group_players ugp
+          JOIN players p ON p.id = ugp.player_id AND p.user_id = ${req.user.id}
+          WHERE ugp.group_id = g.id
+        )
       ORDER BY g.created_at DESC
     `;
     res.json(groups);
@@ -58,17 +61,54 @@ router.get('/user/:username', optionalAuth, async (req, res, next) => {
 
     const groups = await sql`
       SELECT g.*,
-        COUNT(DISTINCT gp.player_id)::int AS player_count,
-        COUNT(DISTINCT t.id)::int          AS tournament_count
+        (SELECT COUNT(DISTINCT tp.player_id)::int
+         FROM tournament_players tp
+         JOIN tournaments t ON t.id = tp.tournament_id
+         WHERE t.group_id = g.id) AS player_count,
+        (SELECT COUNT(*)::int FROM tournaments t WHERE t.group_id = g.id) AS tournament_count
       FROM groups g
-      LEFT JOIN group_players gp ON gp.group_id = g.id
-      LEFT JOIN tournaments   t  ON t.group_id  = g.id
       WHERE g.user_id = ${owner.id}
         AND (${isOwner} OR g.is_public = true)
-      GROUP BY g.id
       ORDER BY g.created_at DESC
     `;
-    res.json({ owner, groups });
+
+    const [playerStats] = await sql`
+      SELECT
+        COUNT(DISTINCT tp.tournament_id)::int AS torneos,
+        COUNT(m.id)::int                      AS partidos,
+        COALESCE(SUM(CASE
+          WHEN m.score1 > m.score2 AND (m.team1_p1 = p.id OR m.team1_p2 = p.id) THEN 1
+          WHEN m.score2 > m.score1 AND (m.team2_p1 = p.id OR m.team2_p2 = p.id) THEN 1
+          ELSE 0 END), 0)::int                AS victorias
+      FROM players p
+      JOIN tournament_players tp ON tp.player_id = p.id
+      LEFT JOIN matches m ON m.tournament_id = tp.tournament_id
+        AND (m.team1_p1 = p.id OR m.team1_p2 = p.id
+          OR m.team2_p1 = p.id OR m.team2_p2 = p.id)
+      WHERE p.user_id = ${owner.id}
+    `;
+
+    res.json({ owner, groups, stats: playerStats ?? { torneos: 0, partidos: 0, victorias: 0 } });
+  } catch (err) { next(err); }
+});
+
+// GET /api/groups/search?q= — busca grupos públicos por nombre
+router.get('/search', async (req, res, next) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.length < 2) return res.json([]);
+    const sql = getDb();
+    const groups = await sql`
+      SELECT g.id, g.name, g.description, g.emojis, g.created_at,
+             u.username AS owner_username, u.name AS owner_name
+      FROM groups g
+      JOIN users u ON u.id = g.user_id
+      WHERE g.is_public = true
+        AND g.name ILIKE ${'%' + q + '%'}
+      ORDER BY g.created_at DESC
+      LIMIT 10
+    `;
+    res.json(groups);
   } catch (err) { next(err); }
 });
 
