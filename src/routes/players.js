@@ -62,10 +62,8 @@ router.get('/group/:groupId', async (req, res, next) => {
 
 // POST /api/players/resolve
 // Body: { name, groupId, tournamentId? }
-// Busca el jugador dentro del grupo (no globalmente).
-// Si existe en ese grupo lo reutiliza; si no, crea uno nuevo aunque el nombre exista en otro grupo.
-// Si se pasa tournamentId, también vincula el jugador a esa jornada específica.
-router.post('/resolve', async (req, res, next) => {
+// Acepta @username para vincular al usuario registrado y generar una invitación automática.
+router.post('/resolve', optionalAuth, async (req, res, next) => {
   try {
     const { name, groupId, tournamentId } = req.body;
     if (!name?.trim())  return res.status(400).json({ error: 'name requerido' });
@@ -73,28 +71,40 @@ router.post('/resolve', async (req, res, next) => {
 
     const sql = getDb();
 
-    // Busca dentro del grupo ignorando mayúsculas
+    const trimmed = name.trim();
+    let resolvedName   = trimmed;
+    let inviteUserId   = null;
+    let inviteUsername = null;
+
+    if (trimmed.startsWith('@')) {
+      const username = trimmed.slice(1);
+      if (!username) return res.status(400).json({ error: 'Nombre de usuario inválido' });
+      const [foundUser] = await sql`SELECT id, name, username FROM users WHERE username = ${username}`;
+      if (!foundUser) return res.status(404).json({ error: `No existe el usuario @${username}` });
+      resolvedName   = foundUser.name;
+      inviteUserId   = foundUser.id;
+      inviteUsername = foundUser.username;
+    }
+
     let [player] = await sql`
       SELECT p.*
       FROM   players p
       JOIN   group_players gp ON gp.player_id = p.id
       WHERE  gp.group_id = ${groupId}
-        AND  LOWER(p.name) = LOWER(${name.trim()})
+        AND  LOWER(p.name) = LOWER(${resolvedName})
     `;
 
     if (!player) {
       [player] = await sql`
-        INSERT INTO players (id, name) VALUES (${uid()}, ${name.trim()}) RETURNING *
+        INSERT INTO players (id, name) VALUES (${uid()}, ${resolvedName}) RETURNING *
       `;
     }
 
-    // Vincula al grupo (ignora si ya existe)
     await sql`
       INSERT INTO group_players (group_id, player_id)
       VALUES (${groupId}, ${player.id}) ON CONFLICT DO NOTHING
     `;
 
-    // Vincula a la jornada específica si se provee tournamentId
     if (tournamentId) {
       await sql`
         INSERT INTO tournament_players (tournament_id, player_id)
@@ -102,7 +112,23 @@ router.post('/resolve', async (req, res, next) => {
       `;
     }
 
-    res.status(201).json({ player });
+    let invitationCreated = false;
+    if (inviteUserId && !player.user_id && req.user) {
+      const [existing] = await sql`
+        SELECT id FROM player_invitations WHERE player_id = ${player.id} AND status = 'pending'
+      `;
+      if (!existing) {
+        await sql`
+          INSERT INTO player_invitations
+            (id, player_id, group_id, invited_by, invited_identifier, invited_user_id)
+          VALUES
+            (${uid()}, ${player.id}, ${groupId}, ${req.user.id}, ${'@' + inviteUsername}, ${inviteUserId})
+        `;
+        invitationCreated = true;
+      }
+    }
+
+    res.status(201).json({ player, invitationCreated });
   } catch (err) { next(err); }
 });
 
