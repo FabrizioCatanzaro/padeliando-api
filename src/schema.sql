@@ -31,8 +31,10 @@ CREATE TABLE IF NOT EXISTS tournaments (
   name       TEXT NOT NULL,
   mode       TEXT NOT NULL DEFAULT 'free',
   status     TEXT NOT NULL DEFAULT 'active',
+  live_match JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS live_match JSONB;
  
 -- Parejas fijas (solo modo pairs)
 CREATE TABLE IF NOT EXISTS pairs (
