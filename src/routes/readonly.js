@@ -52,6 +52,7 @@ router.get('/:tournamentId', async (req, res, next) => {
       name:           tournament.name,
       mode:           tournament.mode,
       status:         tournament.status,
+      live_match:     tournament.live_match ?? null,
       group_id:       tournament.group_id,
       owner_username: tournament.owner_username,
       created_at:     tournament.created_at,
