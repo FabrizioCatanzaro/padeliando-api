@@ -4,22 +4,22 @@ import { uid }    from '../uid.js';
 import { optionalAuth } from '../middleware/auth.js';
 
 const router = Router();
- 
+
 // GET /api/tournaments/:id
 router.get('/:id', async (req, res, next) => {
   try {
     const sql = getDb();
     const { id } = req.params;
- 
+
     const [tournament] = await sql`SELECT * FROM tournaments WHERE id = ${id}`;
     if (!tournament) return res.status(404).json({ error: 'Torneo no encontrado' });
- 
+
     const pairs = await sql`SELECT * FROM pairs WHERE tournament_id = ${id}`;
- 
+
     const matches = await sql`
       SELECT * FROM matches WHERE tournament_id = ${id} ORDER BY created_at DESC
     `;
- 
+
     // Incluir info de vinculación: usuario registrado + invitación pendiente si aplica
     // Solo jugadores explícitamente agregados a esta jornada (tournament_players)
     const players = await sql`
@@ -36,18 +36,18 @@ router.get('/:id', async (req, res, next) => {
       LEFT JOIN player_invitations pi
         ON pi.player_id = p.id AND pi.group_id = ${tournament.group_id} AND pi.status = 'pending'
     `;
- 
+
     res.json({ ...tournament, players, pairs, matches });
   } catch (err) { next(err); }
 });
- 
+
 // POST /api/tournaments
-// Body: { groupId, name, mode, playerNames[], pairs?: [{p1Name,p2Name}] }
+// Body: { groupId, name, mode, format, playerNames[], pairs?: [{p1Name,p2Name}] }
 // playerNames puede incluir entradas @username para vincular a usuarios registrados.
 router.post('/', optionalAuth, async (req, res, next) => {
   try {
     const {
-      groupId, name, mode = 'free',
+      groupId, name, mode = 'free', format = 'liga',
       playerNames = [], pairs: pairsInput = []
     } = req.body;
 
@@ -55,6 +55,13 @@ router.post('/', optionalAuth, async (req, res, next) => {
     if (!name?.trim()) return res.status(400).json({ error: 'nombre requerido' });
     if (name.trim().length < 2) return res.status(400).json({ error: 'El nombre la jornada tiene que tener mas de 2 caracteres' });
     if (name.trim().length > 30) return res.status(400).json({ error: 'El nombre la jornada no puede superar los 30 caracteres' });
+    if (!['liga', 'americano'].includes(format)) return res.status(400).json({ error: 'format debe ser "liga" o "americano"' });
+
+    if (format === 'americano') {
+      if (pairsInput.length < 8 || pairsInput.length > 16) {
+        return res.status(400).json({ error: 'El modo Americano requiere entre 8 y 16 parejas' });
+      }
+    }
 
     const sql  = getDb();
     const tId  = uid();
@@ -102,8 +109,8 @@ router.post('/', optionalAuth, async (req, res, next) => {
     }
 
     const [tournament] = await sql`
-        INSERT INTO tournaments (id, group_id, name, mode)
-        VALUES (${tId}, ${groupId}, ${name.trim()}, ${mode})
+        INSERT INTO tournaments (id, group_id, name, mode, format)
+        VALUES (${tId}, ${groupId}, ${name.trim()}, ${mode}, ${format})
       RETURNING *`;
 
     for (const player of players) {
@@ -144,7 +151,7 @@ router.post('/', optionalAuth, async (req, res, next) => {
     res.status(201).json({ ...tournament, players, pairs, matches: [] });
   } catch (err) { next(err); }
 });
- 
+
 // PATCH /api/tournaments/:id
 router.patch('/:id', async (req, res, next) => {
   try {
@@ -164,7 +171,7 @@ router.patch('/:id', async (req, res, next) => {
     res.json(updated);
   } catch (err) { next(err); }
 });
- 
+
 // DELETE /api/tournaments/:id
 router.delete('/:id', async (req, res, next) => {
   try {
@@ -182,7 +189,7 @@ router.delete('/:id/matches', async (req, res, next) => {
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
- 
+
 // PATCH /api/tournaments/:id/live
 router.patch('/:id/live', async (req, res, next) => {
   try {
@@ -193,5 +200,401 @@ router.patch('/:id/live', async (req, res, next) => {
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
+
+// ─── AMERICANO ────────────────────────────────────────────────────────────────
+
+// POST /api/tournaments/:id/schedule
+// Genera un calendario aleatorio para la fase previa del Americano.
+// Cada pareja juega exactamente 2 partidos contra rivales distintos.
+// No crea partidos en BD — devuelve el calendario propuesto.
+router.post('/:id/schedule', async (req, res, next) => {
+  try {
+    const sql = getDb();
+    const [tournament] = await sql`SELECT * FROM tournaments WHERE id = ${req.params.id}`;
+    if (!tournament) return res.status(404).json({ error: 'Torneo no encontrado' });
+    if (tournament.format !== 'americano') return res.status(400).json({ error: 'Solo disponible en formato Americano' });
+
+    const pairsRaw = await sql`
+      SELECT pr.id, p1.name AS p1_name, p2.name AS p2_name
+      FROM pairs pr
+      JOIN players p1 ON p1.id = pr.p1_id
+      JOIN players p2 ON p2.id = pr.p2_id
+      WHERE pr.tournament_id = ${req.params.id}
+    `;
+
+    if (pairsRaw.length < 8 || pairsRaw.length > 16) {
+      return res.status(400).json({ error: 'Se necesitan entre 8 y 16 parejas para generar el calendario' });
+    }
+
+    const schedule = generatePreviaSchedule(pairsRaw);
+    res.json({ schedule });
+  } catch (err) { next(err); }
+});
+
+// POST /api/tournaments/:id/bracket
+// Genera el cuadro eliminatorio a partir de la tabla de la fase previa.
+// Guarda el bracket en tournaments.bracket y lo retorna.
+router.post('/:id/bracket', async (req, res, next) => {
+  try {
+    const sql = getDb();
+    const [tournament] = await sql`SELECT * FROM tournaments WHERE id = ${req.params.id}`;
+    if (!tournament) return res.status(404).json({ error: 'Torneo no encontrado' });
+    if (tournament.format !== 'americano') return res.status(400).json({ error: 'Solo disponible en formato Americano' });
+
+    // Traer parejas con nombres de jugadores
+    const pairsRaw = await sql`
+      SELECT pr.id, pr.p1_id, pr.p2_id, p1.name AS p1_name, p2.name AS p2_name
+      FROM pairs pr
+      JOIN players p1 ON p1.id = pr.p1_id
+      JOIN players p2 ON p2.id = pr.p2_id
+      WHERE pr.tournament_id = ${req.params.id}
+    `;
+
+    if (pairsRaw.length < 8 || pairsRaw.length > 16) {
+      return res.status(400).json({ error: 'Se necesitan entre 8 y 16 parejas para generar el bracket' });
+    }
+
+    // Traer partidos de la fase previa
+    const matches = await sql`SELECT * FROM matches WHERE tournament_id = ${req.params.id}`;
+
+    // Calcular standings por pareja
+    const standings = computeStandings(pairsRaw, matches);
+
+    // Generar bracket
+    const bracket = generateBracket(standings);
+
+    // Persistir
+    const [updated] = await sql`
+      UPDATE tournaments SET bracket = ${JSON.stringify(bracket)}::jsonb
+      WHERE id = ${req.params.id} RETURNING *
+    `;
+
+    res.json({ ...updated, bracket });
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/tournaments/:id/bracket  — reemplaza el bracket completo (reorganizar cruces)
+// Body: { bracket }
+router.patch('/:id/bracket', async (req, res, next) => {
+  try {
+    const { bracket } = req.body;
+    if (!bracket) return res.status(400).json({ error: 'bracket requerido' });
+    const sql = getDb();
+    const [updated] = await sql`
+      UPDATE tournaments SET bracket = ${JSON.stringify(bracket)}::jsonb
+      WHERE id = ${req.params.id} RETURNING *
+    `;
+    if (!updated) return res.status(404).json({ error: 'Torneo no encontrado' });
+    res.json({ ...updated, bracket });
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/tournaments/:id/bracket/:matchId
+// Registra el resultado de un partido del bracket y propaga el ganador al siguiente round.
+// Body: { score1, score2 }
+router.patch('/:id/bracket/:matchId', async (req, res, next) => {
+  try {
+    const { score1, score2 } = req.body;
+    if (score1 == null || score2 == null) return res.status(400).json({ error: 'score1 y score2 requeridos' });
+    if (typeof score1 !== 'number' || typeof score2 !== 'number') return res.status(400).json({ error: 'Los scores deben ser números' });
+    if (score1 === score2) return res.status(400).json({ error: 'No puede haber empate en la fase eliminatoria' });
+
+    const sql = getDb();
+    const [tournament] = await sql`SELECT * FROM tournaments WHERE id = ${req.params.id}`;
+    if (!tournament) return res.status(404).json({ error: 'Torneo no encontrado' });
+    if (!tournament.bracket) return res.status(400).json({ error: 'El bracket aún no fue generado' });
+
+    const bracket = tournament.bracket;
+    const { matchId } = req.params;
+
+    const updated = applyBracketResult(bracket, matchId, score1, score2);
+    if (!updated) return res.status(404).json({ error: 'Partido de bracket no encontrado' });
+
+    const [saved] = await sql`
+      UPDATE tournaments SET bracket = ${JSON.stringify(updated)}::jsonb
+      WHERE id = ${req.params.id} RETURNING *
+    `;
+
+    res.json({ ...saved, bracket: updated });
+  } catch (err) { next(err); }
+});
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Genera un calendario de fase previa donde cada pareja juega exactamente 2 partidos
+ * contra rivales distintos.
+ * @param {Array} pairs - [{ id, p1_name, p2_name }]
+ * @returns {Array} - [{ round, team1: { id, name }, team2: { id, name } }]
+ */
+function generatePreviaSchedule(pairs) {
+  const shuffled = [...pairs].sort(() => Math.random() - 0.5);
+  const rounds = buildRoundRobin(shuffled);
+  const schedule = [];
+  const byePairs = [];
+
+  for (let r = 0; r < Math.min(2, rounds.length); r++) {
+    for (const [a, b] of rounds[r].matches) {
+      schedule.push({
+        round: r + 1,
+        team1: { id: a.id, name: `${a.p1_name} & ${a.p2_name}` },
+        team2: { id: b.id, name: `${b.p1_name} & ${b.p2_name}` },
+      });
+    }
+    if (rounds[r].bye) byePairs.push(rounds[r].bye);
+  }
+
+  // N impar: las 2 parejas con bye se enfrentan entre sí
+  if (byePairs.length === 2) {
+    const [a, b] = byePairs;
+    schedule.push({
+      round: 3,
+      team1: { id: a.id, name: `${a.p1_name} & ${a.p2_name}` },
+      team2: { id: b.id, name: `${b.p1_name} & ${b.p2_name}` },
+    });
+  }
+
+  return schedule;
+}
+
+/**
+ * Genera rondas de round-robin. Cada ronda retorna { matches, bye }.
+ * Si N es impar, agrega un null temporario; la pareja que cae con null queda como bye.
+ */
+function buildRoundRobin(teams) {
+  const list = [...teams];
+  if (list.length % 2 !== 0) list.push(null);
+  const n = list.length;
+  const rounds = [];
+
+  for (let r = 0; r < n - 1; r++) {
+    const round = { matches: [], bye: null };
+    for (let i = 0; i < n / 2; i++) {
+      const a = list[i];
+      const b = list[n - 1 - i];
+      if (a === null) round.bye = b;
+      else if (b === null) round.bye = a;
+      else round.matches.push([a, b]);
+    }
+    rounds.push(round);
+    list.splice(1, 0, list.pop());
+  }
+  return rounds;
+}
+
+/**
+ * Calcula la tabla de posiciones de la fase previa para cada pareja.
+ * @param {Array} pairs  - [{ id, p1_id, p2_id, p1_name, p2_name }]
+ * @param {Array} matches - registros de la tabla matches
+ * @returns {Array} standings ordenados por wins DESC, diff DESC
+ */
+function computeStandings(pairs, matches) {
+  return pairs
+    .map((pr) => {
+      let wins = 0;
+      let diff = 0;
+      for (const m of matches) {
+        const isTeam1 = m.team1_p1 === pr.p1_id || m.team1_p1 === pr.p2_id
+                     || m.team1_p2 === pr.p1_id || m.team1_p2 === pr.p2_id;
+        const isTeam2 = m.team2_p1 === pr.p1_id || m.team2_p1 === pr.p2_id
+                     || m.team2_p2 === pr.p1_id || m.team2_p2 === pr.p2_id;
+        if (isTeam1) {
+          if (m.score1 > m.score2) wins++;
+          diff += m.score1 - m.score2;
+        } else if (isTeam2) {
+          if (m.score2 > m.score1) wins++;
+          diff += m.score2 - m.score1;
+        }
+      }
+      return {
+        pair_id:   pr.id,
+        pair_name: `${pr.p1_name} & ${pr.p2_name}`,
+        wins,
+        diff,
+      };
+    })
+    .sort((a, b) => b.wins - a.wins || b.diff - a.diff)
+    .map((s, i) => ({ ...s, seed: i + 1 }));
+}
+
+/**
+ * Construye la estructura completa del bracket americano a partir de los standings.
+ * - N pares totales (8-16)
+ * - D = 16 - N pasan directo a cuartos (seeds 1..D)
+ * - N - D pares juegan octavos (N - 8 partidos)
+ * - Cuartos: [[1,8],[4,5],[2,7],[3,6]] seeds
+ * - Semis: winner(q0) vs winner(q1), winner(q2) vs winner(q3)
+ * - Final: winner(s0) vs winner(s1)
+ */
+function generateBracket(standings) {
+  const N = standings.length;
+  const D = 16 - N; // directos a cuartos (puede ser 0)
+
+  // Octavos: seeds D+1..N en pares (primero vs último, segundo vs penúltimo, ...)
+  const octavosTeams = standings.slice(D); // índices D..N-1 (seeds D+1..N)
+  const octavos = [];
+  for (let i = 0; i < octavosTeams.length / 2; i++) {
+    const hi = octavosTeams[i];                              // seed D+1+i
+    const lo = octavosTeams[octavosTeams.length - 1 - i];   // seed N-i
+    octavos.push({
+      id:          `o${i}`,
+      pair1_id:    hi.pair_id,
+      pair1_name:  hi.pair_name,
+      pair2_id:    lo.pair_id,
+      pair2_name:  lo.pair_name,
+      score1:      null,
+      score2:      null,
+      winner_id:   null,
+      winner_name: null,
+      // el ganador ocupa el seed D+1+i en cuartos
+      winner_seed: D + 1 + i,
+    });
+  }
+
+  // Cuartos: siempre 4 partidos con seeds [1,8],[4,5],[2,7],[3,6]
+  const qfPairings = [[1, 8], [4, 5], [2, 7], [3, 6]];
+  const cuartos = qfPairings.map(([s1, s2], i) => {
+    const slot1 = slotForSeed(s1, D, standings, octavos);
+    const slot2 = slotForSeed(s2, D, standings, octavos);
+    return {
+      id:          `q${i}`,
+      slot1_seed:  s1,
+      slot2_seed:  s2,
+      slot1_source: s1 > D ? `o${s1 - D - 1}` : null,
+      slot2_source: s2 > D ? `o${s2 - D - 1}` : null,
+      pair1_id:    slot1.pair_id,
+      pair1_name:  slot1.pair_name,
+      pair2_id:    slot2.pair_id,
+      pair2_name:  slot2.pair_name,
+      score1:      null,
+      score2:      null,
+      winner_id:   null,
+      winner_name: null,
+    };
+  });
+
+  const semis = [
+    { id: 's0', source1: 'q0', source2: 'q1', pair1_id: null, pair1_name: null, pair2_id: null, pair2_name: null, score1: null, score2: null, winner_id: null, winner_name: null },
+    { id: 's1', source1: 'q2', source2: 'q3', pair1_id: null, pair1_name: null, pair2_id: null, pair2_name: null, score1: null, score2: null, winner_id: null, winner_name: null },
+  ];
+
+  const final = {
+    id: 'f0', source1: 's0', source2: 's1',
+    pair1_id: null, pair1_name: null,
+    pair2_id: null, pair2_name: null,
+    score1: null, score2: null,
+    winner_id: null, winner_name: null,
+  };
+
+  return {
+    generated_at: new Date().toISOString(),
+    total_pairs:  N,
+    direct_count: D,
+    standings,
+    octavos,
+    cuartos,
+    semis,
+    final,
+  };
+}
+
+/**
+ * Retorna el par (o placeholder) que ocupa un seed slot en cuartos.
+ * Si el seed es directo (s <= D), el par ya está disponible.
+ * Si viene de octavos (s > D), el par es null hasta que se juegue ese octavo.
+ */
+function slotForSeed(seed, D, standings, octavos) {
+  if (seed <= D) {
+    const s = standings[seed - 1];
+    return { pair_id: s.pair_id, pair_name: s.pair_name };
+  }
+  // El winner del octavo correspondiente aún no se conoce
+  return { pair_id: null, pair_name: null };
+}
+
+/**
+ * Aplica el resultado de un partido del bracket, determina el ganador
+ * y lo propaga a la siguiente ronda.
+ * @returns {Object|null} bracket actualizado, o null si no encontró el partido
+ */
+function applyBracketResult(bracket, matchId, score1, score2) {
+  const b = JSON.parse(JSON.stringify(bracket)); // clonar
+
+  const winner = score1 > score2 ? 'pair1' : 'pair2';
+
+  // Buscar el match en todas las rondas
+  let found = false;
+
+  for (const round of ['octavos', 'cuartos', 'semis']) {
+    const arr = b[round];
+    const idx = arr.findIndex((m) => m.id === matchId);
+    if (idx === -1) continue;
+
+    const match = arr[idx];
+    match.score1     = score1;
+    match.score2     = score2;
+    match.winner_id  = match[`${winner}_id`];
+    match.winner_name = match[`${winner}_name`];
+    found = true;
+
+    propagateWinner(b, matchId, match.winner_id, match.winner_name);
+    break;
+  }
+
+  // Final
+  if (!found && b.final.id === matchId) {
+    const match = b.final;
+    match.score1      = score1;
+    match.score2      = score2;
+    match.winner_id   = match[`${winner}_id`];
+    match.winner_name = match[`${winner}_name`];
+    found = true;
+  }
+
+  return found ? b : null;
+}
+
+/**
+ * Busca qué partido tiene como fuente (source1/source2) el matchId completado
+ * y rellena pair1 o pair2 con el ganador.
+ */
+function propagateWinner(bracket, completedId, winnerId, winnerName) {
+  // octavos → cuartos
+  for (const qm of bracket.cuartos) {
+    if (qm.slot1_source === completedId) {
+      qm.pair1_id   = winnerId;
+      qm.pair1_name = winnerName;
+      return;
+    }
+    if (qm.slot2_source === completedId) {
+      qm.pair2_id   = winnerId;
+      qm.pair2_name = winnerName;
+      return;
+    }
+  }
+
+  // cuartos → semis
+  for (const sm of bracket.semis) {
+    if (sm.source1 === completedId) {
+      sm.pair1_id   = winnerId;
+      sm.pair1_name = winnerName;
+      return;
+    }
+    if (sm.source2 === completedId) {
+      sm.pair2_id   = winnerId;
+      sm.pair2_name = winnerName;
+      return;
+    }
+  }
+
+  // semis → final
+  if (bracket.final.source1 === completedId) {
+    bracket.final.pair1_id   = winnerId;
+    bracket.final.pair1_name = winnerName;
+  } else if (bracket.final.source2 === completedId) {
+    bracket.final.pair2_id   = winnerId;
+    bracket.final.pair2_name = winnerName;
+  }
+}
 
 export default router;
