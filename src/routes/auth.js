@@ -8,6 +8,7 @@ import { Resend } from 'resend';
 import { getDb }         from '../db.js';
 import { uid }           from '../uid.js';
 import { requireAuth } from '../middleware/auth.js';
+import { getActiveSubscription } from './subscriptions.js';
 
 const router       = Router();
 const SECRET       = process.env.JWT_SECRET;
@@ -267,7 +268,8 @@ router.get('/me', async (req, res, next) => {
       SELECT id, email, name, username, created_at FROM users WHERE id = ${id}
     `;
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-    res.json(user);
+    const subscription = await getActiveSubscription(sql, id);
+    res.json({ ...user, subscription });
   } catch { res.status(401).json({ error: 'Token inválido' }); }
 });
 
