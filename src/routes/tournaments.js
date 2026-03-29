@@ -294,7 +294,7 @@ router.patch('/:id/bracket', async (req, res, next) => {
 // Body: { score1, score2 }
 router.patch('/:id/bracket/:matchId', async (req, res, next) => {
   try {
-    const { score1, score2 } = req.body;
+    const { score1, score2, duration_seconds } = req.body;
     if (score1 == null || score2 == null) return res.status(400).json({ error: 'score1 y score2 requeridos' });
     if (typeof score1 !== 'number' || typeof score2 !== 'number') return res.status(400).json({ error: 'Los scores deben ser números' });
     if (score1 === score2) return res.status(400).json({ error: 'No puede haber empate en la fase eliminatoria' });
@@ -307,7 +307,7 @@ router.patch('/:id/bracket/:matchId', async (req, res, next) => {
     const bracket = tournament.bracket;
     const { matchId } = req.params;
 
-    const updated = applyBracketResult(bracket, matchId, score1, score2);
+    const updated = applyBracketResult(bracket, matchId, score1, score2, duration_seconds ?? null);
     if (!updated) return res.status(404).json({ error: 'Partido de bracket no encontrado' });
 
     const [saved] = await sql`
@@ -517,7 +517,7 @@ function slotForSeed(seed, D, standings, octavos) {
  * y lo propaga a la siguiente ronda.
  * @returns {Object|null} bracket actualizado, o null si no encontró el partido
  */
-function applyBracketResult(bracket, matchId, score1, score2) {
+function applyBracketResult(bracket, matchId, score1, score2, duration_seconds = null) {
   const b = JSON.parse(JSON.stringify(bracket)); // clonar
 
   const winner = score1 > score2 ? 'pair1' : 'pair2';
@@ -531,10 +531,11 @@ function applyBracketResult(bracket, matchId, score1, score2) {
     if (idx === -1) continue;
 
     const match = arr[idx];
-    match.score1     = score1;
-    match.score2     = score2;
-    match.winner_id  = match[`${winner}_id`];
-    match.winner_name = match[`${winner}_name`];
+    match.score1            = score1;
+    match.score2            = score2;
+    match.duration_seconds  = duration_seconds;
+    match.winner_id         = match[`${winner}_id`];
+    match.winner_name       = match[`${winner}_name`];
     found = true;
 
     propagateWinner(b, matchId, match.winner_id, match.winner_name);
@@ -544,10 +545,11 @@ function applyBracketResult(bracket, matchId, score1, score2) {
   // Final
   if (!found && b.final.id === matchId) {
     const match = b.final;
-    match.score1      = score1;
-    match.score2      = score2;
-    match.winner_id   = match[`${winner}_id`];
-    match.winner_name = match[`${winner}_name`];
+    match.score1           = score1;
+    match.score2           = score2;
+    match.duration_seconds = duration_seconds;
+    match.winner_id        = match[`${winner}_id`];
+    match.winner_name      = match[`${winner}_name`];
     found = true;
   }
 
