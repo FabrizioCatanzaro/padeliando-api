@@ -119,7 +119,7 @@ router.get('/:groupId/history', async (req, res, next) => {
     const sql = getDb();
 
     const tournaments = await sql`
-      SELECT id, name, created_at, status, mode
+      SELECT id, name, created_at, status, mode, format, bracket
       FROM   tournaments
       WHERE  group_id = ${groupId}
       ORDER  BY created_at ASC

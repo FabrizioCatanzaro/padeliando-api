@@ -11,7 +11,8 @@ import matchesRouter     from './routes/matches.js';
 import pairsRouter       from './routes/pairs.js';
 import readonlyRouter    from './routes/readonly.js';
 import authRouter        from './routes/auth.js';
-import invitationsRouter from './routes/invitations.js';
+import invitationsRouter    from './routes/invitations.js';
+import subscriptionsRouter  from './routes/subscriptions.js';
 import { getDb } from './db.js';
 
 const app  = express();
@@ -43,7 +44,8 @@ app.use('/api/tournaments', tournamentsRouter);
 app.use('/api/matches',     matchesRouter);
 app.use('/api/pairs',       pairsRouter);
 app.use('/api/readonly',    readonlyRouter);
-app.use('/api/invitations', invitationsRouter);
+app.use('/api/invitations',   invitationsRouter);
+app.use('/api/subscriptions', subscriptionsRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
