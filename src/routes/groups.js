@@ -211,6 +211,13 @@ router.get('/:groupId', async (req, res, next) => {
 
       for (const t of tournaments) {
         if (t.status !== 'finished') continue;
+
+        // Americano: el ganador es quien ganó la final del bracket
+        if (t.format === 'americano' && t.bracket?.final?.winner_name) {
+          t.winner_label = t.bracket.final.winner_name;
+          continue;
+        }
+
         const tWins = winsByT[t.id] ?? [];
         if (!tWins.length) continue;
         const maxW    = Math.max(...tWins.map((w) => w.wins));
