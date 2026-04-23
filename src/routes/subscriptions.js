@@ -103,11 +103,10 @@ router.post('/checkout', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'billing_period debe ser monthly, quarterly o annual' });
     
     const sql = getDb();
-    
+
     // Obtener el email del usuario (puede no venir en req.user)
     const [user] = await sql`SELECT email FROM users WHERE id = ${req.user.id}`;
-    console.log(req.user);
-    
+
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
     const preapproval = await new PreApproval(mp).create({
@@ -139,8 +138,6 @@ router.post('/checkout', requireAuth, async (req, res, next) => {
 router.post('/webhook', async (req, res) => {
   try {
     const body = req.body;
-    console.log("body webhook",body);
-    
 
     if (body.type === 'subscription_preapproval') {
       const preapproval = await new PreApproval(mp).get({ id: body.data.id });
