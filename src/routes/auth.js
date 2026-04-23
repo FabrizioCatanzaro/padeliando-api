@@ -8,6 +8,8 @@ import { Resend } from 'resend';
 import { getDb }         from '../db.js';
 import { uid }           from '../uid.js';
 import { requireAuth } from '../middleware/auth.js';
+import { uploadAvatar } from '../middleware/upload.js';
+import { uploadBuffer, deleteByPublicId } from '../lib/cloudinary.js';
 import { getActiveSubscription } from './subscriptions.js';
 
 const router       = Router();
@@ -122,7 +124,7 @@ router.post('/register', async (req, res, next) => {
     if (existing) return res.status(409).json({ error: 'Ya existe una cuenta con ese email. Intente recuperar la contraseña si no la recuerda.' });
     
     const password_hash = await bcrypt.hash(password, 10);
-    const userError = validateUser(name)
+    const userError = validateUser(name);
     if (userError) return res.status(400).json({ error: userError });
 
     const username      = await generateUsername(sql, name);
@@ -130,7 +132,7 @@ router.post('/register', async (req, res, next) => {
     const [user] = await sql`
       INSERT INTO users (id, email, password_hash, name, username)
       VALUES (${uid()}, LOWER(${email}), ${password_hash}, ${name.trim()}, ${username})
-      RETURNING id, email, name, username, created_at
+      RETURNING id, email, name, username, avatar_url, created_at
     `;
 
     const refreshToken = setAuthCookies(res, user);
@@ -192,14 +194,14 @@ router.post('/google', async (req, res, next) => {
         [user] = await sql`
           UPDATE users SET google_id = ${google_id}
           WHERE id = ${byEmail.id}
-          RETURNING id, email, name, username, created_at
+          RETURNING id, email, name, username, avatar_url, created_at
         `;
       } else {
         const username = await generateUsername(sql, name);
         [user] = await sql`
           INSERT INTO users (id, email, google_id, name, username)
           VALUES (${uid()}, LOWER(${email}), ${google_id}, ${name}, ${username})
-          RETURNING id, email, name, username, created_at
+          RETURNING id, email, name, username, avatar_url, created_at
         `;
       }
     }
@@ -231,7 +233,7 @@ router.post('/refresh', async (req, res, next) => {
     await sql`DELETE FROM refresh_tokens WHERE id = ${stored.id}`;
 
     const [user] = await sql`
-      SELECT id, email, name, username FROM users WHERE id = ${stored.user_id}
+      SELECT id, email, name, username, avatar_url FROM users WHERE id = ${stored.user_id}
     `;
     if (!user) return res.status(401).json({ error: 'Usuario no encontrado' });
 
@@ -265,7 +267,7 @@ router.get('/me', async (req, res, next) => {
     const { id } = jwt.verify(token, SECRET);
     const sql = getDb();
     const [user] = await sql`
-      SELECT id, email, name, username, created_at FROM users WHERE id = ${id}
+      SELECT id, email, name, username, avatar_url, created_at FROM users WHERE id = ${id}
     `;
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
     const subscription = await getActiveSubscription(sql, id);
@@ -280,7 +282,7 @@ router.get('/search', async (req, res, next) => {
     if (!q || q.length < 2) return res.json([]);
     const sql = getDb();
     const users = await sql`
-      SELECT id, name, username, created_at FROM users
+      SELECT id, name, username, avatar_url, created_at FROM users
       WHERE username ILIKE ${'%' + q + '%'} OR name ILIKE ${'%' + q + '%'}
       LIMIT 10
     `;
@@ -416,11 +418,61 @@ router.patch('/me', requireAuth, async (req, res, next) => {
     const values = Object.values(updates);
     const setClauses = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
     const [updated] = await sql.query(
-      `UPDATE users SET ${setClauses} WHERE id = $${keys.length + 1} RETURNING id, name, username`,
+      `UPDATE users SET ${setClauses} WHERE id = $${keys.length + 1} RETURNING id, name, username, avatar_url`,
       [...values, req.user.id]
     );
 
     res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/auth/me/avatar ─────────────────────────────────────────────────
+// Sube/reemplaza el avatar del usuario autenticado (cualquier plan).
+router.post('/me/avatar', requireAuth, uploadAvatar, async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No se envió imagen' });
+    const sql = getDb();
+
+    const [current] = await sql`
+      SELECT avatar_public_id FROM users WHERE id = ${req.user.id}
+    `;
+
+    const result = await uploadBuffer(req.file.buffer, {
+      folder: 'padeliando/avatars',
+    });
+
+    if (current?.avatar_public_id) {
+      await deleteByPublicId(current.avatar_public_id);
+    }
+
+    const [updated] = await sql`
+      UPDATE users
+      SET    avatar_url       = ${result.secure_url},
+             avatar_public_id = ${result.public_id}
+      WHERE  id = ${req.user.id}
+      RETURNING id, name, username, avatar_url
+    `;
+
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// ── DELETE /api/auth/me/avatar ───────────────────────────────────────────────
+router.delete('/me/avatar', requireAuth, async (req, res, next) => {
+  try {
+    const sql = getDb();
+    const [current] = await sql`
+      SELECT avatar_public_id FROM users WHERE id = ${req.user.id}
+    `;
+    if (current?.avatar_public_id) {
+      await deleteByPublicId(current.avatar_public_id);
+    }
+    await sql`
+      UPDATE users
+      SET    avatar_url = NULL, avatar_public_id = NULL
+      WHERE  id = ${req.user.id}
+    `;
+    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 
