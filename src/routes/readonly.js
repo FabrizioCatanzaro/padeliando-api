@@ -28,8 +28,10 @@ router.get('/:tournamentId', async (req, res, next) => {
  
     // Canonical player list from tournament_players table
     const tpPlayers = await sql`
-      SELECT p.id, p.name FROM players p
+      SELECT p.id, p.name, u.avatar_url AS linked_avatar_url
+      FROM   players p
       INNER JOIN tournament_players tp ON tp.player_id = p.id AND tp.tournament_id = ${tournamentId}
+      LEFT  JOIN users u ON u.id = p.user_id
     `;
 
     // Backward-compat: also include any players from matches/pairs not in tournament_players
@@ -42,7 +44,12 @@ router.get('/:tournamentId', async (req, res, next) => {
     ].filter((id) => id && !tpIds.has(id));
 
     const extraPlayers = extraIds.length
-      ? await sql`SELECT id, name FROM players WHERE id = ANY(${extraIds})`
+      ? await sql`
+          SELECT p.id, p.name, u.avatar_url AS linked_avatar_url
+          FROM   players p
+          LEFT   JOIN users u ON u.id = p.user_id
+          WHERE  p.id = ANY(${extraIds})
+        `
       : [];
 
     const players = [...tpPlayers, ...extraPlayers];

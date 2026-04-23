@@ -29,8 +29,9 @@ router.get('/participating', requireAuth, async (req, res, next) => {
     const sql = getDb();
     const groups = await sql`
       SELECT g.*,
-        u.username AS owner_username,
-        u.name     AS owner_name,
+        u.username   AS owner_username,
+        u.name       AS owner_name,
+        u.avatar_url AS owner_avatar_url,
         (SELECT COUNT(DISTINCT tp.player_id)::int
          FROM tournament_players tp
          JOIN tournaments t ON t.id = tp.tournament_id
@@ -54,7 +55,7 @@ router.get('/participating', requireAuth, async (req, res, next) => {
 router.get('/user/:username', optionalAuth, async (req, res, next) => {
   try {
     const sql = getDb();
-    const [owner] = await sql`SELECT id, name, username, created_at FROM users WHERE username = ${req.params.username}`;
+    const [owner] = await sql`SELECT id, name, username, avatar_url, created_at FROM users WHERE username = ${req.params.username}`;
     if (!owner) return res.status(404).json({ error: 'Usuario no encontrado' });
 
     const isOwner = req.user?.id === owner.id;
@@ -100,7 +101,7 @@ router.get('/search', async (req, res, next) => {
     const sql = getDb();
     const groups = await sql`
       SELECT g.id, g.name, g.description, g.emojis, g.created_at,
-             u.username AS owner_username, u.name AS owner_name
+             u.username AS owner_username, u.name AS owner_name, u.avatar_url AS owner_avatar_url
       FROM groups g
       JOIN users u ON u.id = g.user_id
       WHERE g.is_public = true
@@ -128,8 +129,10 @@ router.get('/:groupId/history', async (req, res, next) => {
     const result = [];
     for (const t of tournaments) {
       const players = await sql`
-        SELECT p.id, p.name FROM players p
-        JOIN tournament_players tp ON tp.player_id = p.id AND tp.tournament_id = ${t.id}
+        SELECT p.id, p.name, u.avatar_url AS linked_avatar_url
+        FROM   players p
+        JOIN   tournament_players tp ON tp.player_id = p.id AND tp.tournament_id = ${t.id}
+        LEFT   JOIN users u ON u.id = p.user_id
       `;
       const matches = await sql`
         SELECT * FROM matches WHERE tournament_id = ${t.id} ORDER BY created_at DESC
@@ -151,7 +154,7 @@ router.get('/:groupId', async (req, res, next) => {
     const sql = getDb();
 
     const [group] = await sql`
-      SELECT g.*, u.username AS owner_username, u.name AS owner_name
+      SELECT g.*, u.username AS owner_username, u.name AS owner_name, u.avatar_url AS owner_avatar_url
       FROM groups g
       JOIN users u ON u.id = g.user_id
       WHERE g.id = ${groupId}
@@ -240,7 +243,7 @@ router.get('/:groupId', async (req, res, next) => {
 
     const playerStats = await sql`
       SELECT
-        p.id, p.name,
+        p.id, p.name, u.avatar_url AS linked_avatar_url,
         COUNT(DISTINCT t.id)::int AS torneos,
         SUM(CASE
           WHEN m.score1 > m.score2 AND (m.team1_p1 = p.id OR m.team1_p2 = p.id) THEN 1
@@ -250,10 +253,11 @@ router.get('/:groupId', async (req, res, next) => {
       FROM   players p
       JOIN   group_players gp ON gp.player_id = p.id AND gp.group_id = ${groupId}
       JOIN   tournaments   t  ON t.group_id = ${groupId}
+      LEFT   JOIN users u ON u.id = p.user_id
       LEFT JOIN matches    m  ON m.tournament_id = t.id
         AND (m.team1_p1 = p.id OR m.team1_p2 = p.id
           OR m.team2_p1 = p.id OR m.team2_p2 = p.id)
-      GROUP BY p.id, p.name
+      GROUP BY p.id, p.name, u.avatar_url
       ORDER BY victorias DESC
     `;
 

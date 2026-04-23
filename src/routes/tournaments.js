@@ -22,11 +22,12 @@ router.get('/:id', async (req, res, next) => {
 
     // Incluir info de vinculación: usuario registrado + invitación pendiente si aplica
     // Solo jugadores explícitamente agregados a esta jornada (tournament_players)
-    const players = await sql`
+    const activePlayers = await sql`
       SELECT
         p.*,
         u.username   AS linked_username,
         u.name       AS linked_name,
+        u.avatar_url AS linked_avatar_url,
         pi.id        AS invitation_id,
         pi.status    AS invitation_status,
         pi.invited_identifier
@@ -36,6 +37,31 @@ router.get('/:id', async (req, res, next) => {
       LEFT JOIN player_invitations pi
         ON pi.player_id = p.id AND pi.group_id = ${tournament.group_id} AND pi.status = 'pending'
     `;
+
+    // Jugadores removidos de la jornada pero aún referenciados por matches/pairs.
+    // Se incluyen para que tabla, estadísticas y partidos muestren sus datos,
+    // con flag `removed: true` para que el frontend los trate como solo-lectura.
+    const activeIds = new Set(activePlayers.map((p) => p.id));
+    const orphanIds = [
+      ...new Set([
+        ...pairs.flatMap((p) => [p.p1_id, p.p2_id]),
+        ...matches.flatMap((m) => [m.team1_p1, m.team1_p2, m.team2_p1, m.team2_p2]),
+      ]),
+    ].filter((pid) => pid && !activeIds.has(pid));
+
+    const removedPlayers = orphanIds.length
+      ? await sql`
+          SELECT p.*, u.avatar_url AS linked_avatar_url
+          FROM   players p
+          LEFT   JOIN users u ON u.id = p.user_id
+          WHERE  p.id = ANY(${orphanIds})
+        `
+      : [];
+
+    const players = [
+      ...activePlayers.map((p) => ({ ...p, removed: false })),
+      ...removedPlayers.map((p) => ({ ...p, removed: true })),
+    ];
 
     res.json({ ...tournament, players, pairs, matches });
   } catch (err) { next(err); }
