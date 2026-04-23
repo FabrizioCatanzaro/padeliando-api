@@ -79,6 +79,42 @@ CREATE TABLE IF NOT EXISTS tournament_players (
   PRIMARY KEY (tournament_id, player_id)
 );
 
+-- Soporte para formato Americano
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS format  TEXT NOT NULL DEFAULT 'liga';
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS bracket JSONB;
+
+-- Suscripciones: historial de planes de cada usuario
+-- billing_period es NULL para plan free (sin vencimiento)
+-- ends_at es NULL para plan free (sin vencimiento)
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id             TEXT        PRIMARY KEY,
+  user_id        TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan           TEXT        NOT NULL DEFAULT 'free'
+    CHECK (plan IN ('free', 'premium')),
+  billing_period TEXT
+    CHECK (billing_period IN ('monthly', 'quarterly', 'annual', 'trial')),
+  status         TEXT        NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'cancelled', 'expired')),
+  starts_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ends_at        TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Avatar de usuario (cualquier plan)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url       TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_public_id TEXT;
+
+-- Fotos de jornada (solo usuarios premium pueden subirlas)
+CREATE TABLE IF NOT EXISTS tournament_photos (
+  id            TEXT PRIMARY KEY,
+  tournament_id TEXT NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+  uploaded_by   TEXT NOT NULL REFERENCES users(id),
+  url           TEXT NOT NULL,
+  public_id     TEXT NOT NULL,
+  caption       TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Índices
 CREATE INDEX IF NOT EXISTS idx_tp_tournament         ON tournament_players(tournament_id);
 CREATE INDEX IF NOT EXISTS idx_tournaments_group     ON tournaments(group_id);
@@ -87,3 +123,5 @@ CREATE INDEX IF NOT EXISTS idx_pairs_tournament      ON pairs(tournament_id);
 CREATE INDEX IF NOT EXISTS idx_gp_group              ON group_players(group_id);
 CREATE INDEX IF NOT EXISTS idx_invitations_user      ON player_invitations(invited_user_id);
 CREATE INDEX IF NOT EXISTS idx_invitations_player    ON player_invitations(player_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_user    ON subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_tournament_photos_tournament ON tournament_photos(tournament_id);

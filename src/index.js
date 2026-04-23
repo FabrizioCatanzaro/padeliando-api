@@ -13,6 +13,7 @@ import readonlyRouter    from './routes/readonly.js';
 import authRouter        from './routes/auth.js';
 import invitationsRouter    from './routes/invitations.js';
 import subscriptionsRouter  from './routes/subscriptions.js';
+import photosRouter         from './routes/photos.js';
 import { getDb } from './db.js';
 
 const app  = express();
@@ -41,6 +42,7 @@ app.use('/api/auth',        authRouter);
 app.use('/api/groups',      groupsRouter);
 app.use('/api/players',     playersRouter);
 app.use('/api/tournaments', tournamentsRouter);
+app.use('/api/tournaments/:tournamentId/photos', photosRouter);
 app.use('/api/matches',     matchesRouter);
 app.use('/api/pairs',       pairsRouter);
 app.use('/api/readonly',    readonlyRouter);
