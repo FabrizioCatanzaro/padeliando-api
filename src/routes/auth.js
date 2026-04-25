@@ -276,7 +276,7 @@ router.post('/refresh', async (req, res, next) => {
     await sql`DELETE FROM refresh_tokens WHERE id = ${stored.id}`;
 
     const [user] = await sql`
-      SELECT id, email, name, username, avatar_url FROM users WHERE id = ${stored.user_id}
+      SELECT id, email, name, username, avatar_url, role FROM users WHERE id = ${stored.user_id}
     `;
     if (!user) return res.status(401).json({ error: 'Usuario no encontrado' });
 
@@ -310,7 +310,7 @@ router.get('/me', async (req, res, next) => {
     const { id } = jwt.verify(token, SECRET);
     const sql = getDb();
     const [user] = await sql`
-      SELECT id, email, name, username, avatar_url, created_at FROM users WHERE id = ${id}
+      SELECT id, email, name, username, avatar_url, role, created_at FROM users WHERE id = ${id}
     `;
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
     const subscription = await getActiveSubscription(sql, id);

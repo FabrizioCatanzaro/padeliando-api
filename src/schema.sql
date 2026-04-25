@@ -107,6 +107,11 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_public_id TEXT;
 -- Confirmación de email (registro con email/password)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 
+-- Rol de usuario (acceso a dashboard de administración)
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'
+    CHECK (role IN ('user', 'admin'));
+
 CREATE TABLE IF NOT EXISTS email_verifications (
   id         TEXT        PRIMARY KEY,
   user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
