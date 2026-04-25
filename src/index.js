@@ -14,6 +14,7 @@ import authRouter        from './routes/auth.js';
 import invitationsRouter    from './routes/invitations.js';
 import subscriptionsRouter  from './routes/subscriptions.js';
 import photosRouter         from './routes/photos.js';
+import adminRouter          from './routes/admin.js';
 import { getDb } from './db.js';
 
 const app  = express();
@@ -48,6 +49,7 @@ app.use('/api/pairs',       pairsRouter);
 app.use('/api/readonly',    readonlyRouter);
 app.use('/api/invitations',   invitationsRouter);
 app.use('/api/subscriptions', subscriptionsRouter);
+app.use('/api/admin',         adminRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
