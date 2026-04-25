@@ -5,6 +5,9 @@ import crypto            from 'crypto';
 import { OAuth2Client }  from 'google-auth-library';
 import rateLimit         from 'express-rate-limit';
 import { Resend } from 'resend';
+import { createElement } from 'react';
+import VerifyEmailTemplate  from '../emails/VerifyEmail.jsx';
+import ResetPasswordTemplate from '../emails/ResetPassword.jsx';
 import { getDb }         from '../db.js';
 import { uid }           from '../uid.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -18,7 +21,8 @@ const IS_PROD      = process.env.NODE_ENV === 'production';
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // ── Mailer ────────────────────────────────────────────────────────────────────
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend     = new Resend(process.env.RESEND_API_KEY);
+const MAIL_FROM  = process.env.MAIL_FROM || 'Padeleando <onboarding@resend.dev>';
 
 // ── Rate limiting — máx 10 intentos por IP cada 15 min ────────────────────────
 const loginLimiter = rateLimit({
@@ -27,6 +31,14 @@ const loginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders:   false,
   message:         { error: 'Demasiados intentos. Esperá 15 minutos.' },
+});
+
+const resendVerificationLimiter = rateLimit({
+  windowMs:        15 * 60 * 1000,
+  max:             5,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  message:         { error: 'Demasiados pedidos. Esperá 15 minutos.' },
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -109,6 +121,28 @@ async function clearLoginAttempts(sql, email) {
   await sql`DELETE FROM login_attempts WHERE identifier = LOWER(${email})`;
 }
 
+async function sendVerificationEmail(sql, user) {
+  await sql`DELETE FROM email_verifications WHERE user_id = ${user.id}`;
+
+  const rawToken  = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+  await sql`
+    INSERT INTO email_verifications (id, user_id, token_hash, expires_at)
+    VALUES (${uid()}, ${user.id}, ${tokenHash}, ${expiresAt})
+  `;
+
+  const verifyUrl = `${process.env.FRONTEND_URL}/verify-email/${rawToken}`;
+
+  await resend.emails.send({
+    from:    MAIL_FROM,
+    to:      user.email,
+    subject: 'Confirmá tu email',
+    react:   createElement(VerifyEmailTemplate, { name: user.name, verifyUrl }),
+  });
+}
+
 // ── POST /api/auth/register ───────────────────────────────────────────────────
 router.post('/register', async (req, res, next) => {
   try {
@@ -135,10 +169,9 @@ router.post('/register', async (req, res, next) => {
       RETURNING id, email, name, username, avatar_url, created_at
     `;
 
-    const refreshToken = setAuthCookies(res, user);
-    await saveRefreshToken(sql, user.id, refreshToken);
+    await sendVerificationEmail(sql, user);
 
-    res.status(201).json({ user });
+    res.status(201).json({ pending_verification: true, email: user.email });
   } catch (err) { next(err); }
 });
 
@@ -163,6 +196,14 @@ router.post('/login', loginLimiter, async (req, res, next) => {
     if (!valid) {
       await recordFailedAttempt(sql, email);
       return res.status(401).json({ error: 'Email o contraseña incorrectos' });
+    }
+
+    if (!user.email_verified_at) {
+      await clearLoginAttempts(sql, email);
+      return res.status(403).json({
+        error: 'Tenés que confirmar tu email antes de iniciar sesión. Revisá tu bandeja de entrada o la casilla de Spam.',
+        needs_verification: true,
+      });
     }
 
     await clearLoginAttempts(sql, email);
@@ -192,15 +233,17 @@ router.post('/google', async (req, res, next) => {
       const [byEmail] = await sql`SELECT * FROM users WHERE email = LOWER(${email})`;
       if (byEmail) {
         [user] = await sql`
-          UPDATE users SET google_id = ${google_id}
+          UPDATE users
+          SET google_id = ${google_id},
+              email_verified_at = COALESCE(email_verified_at, NOW())
           WHERE id = ${byEmail.id}
           RETURNING id, email, name, username, avatar_url, created_at
         `;
       } else {
         const username = await generateUsername(sql, name);
         [user] = await sql`
-          INSERT INTO users (id, email, google_id, name, username)
-          VALUES (${uid()}, LOWER(${email}), ${google_id}, ${name}, ${username})
+          INSERT INTO users (id, email, google_id, name, username, email_verified_at)
+          VALUES (${uid()}, LOWER(${email}), ${google_id}, ${name}, ${username}, NOW())
           RETURNING id, email, name, username, avatar_url, created_at
         `;
       }
@@ -290,6 +333,57 @@ router.get('/search', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── POST /api/auth/verify-email ──────────────────────────────────────────────
+router.post('/verify-email', async (req, res, next) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'token requerido' });
+
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const sql       = getDb();
+
+    const [verification] = await sql`
+      SELECT * FROM email_verifications
+      WHERE token_hash = ${tokenHash} AND used = false AND expires_at > NOW()
+    `;
+    if (!verification)
+      return res.status(400).json({ error: 'El enlace es inválido o ya expiró' });
+
+    await sql`UPDATE users SET email_verified_at = NOW() WHERE id = ${verification.user_id}`;
+    await sql`UPDATE email_verifications SET used = true WHERE id = ${verification.id}`;
+
+    const [user] = await sql`
+      SELECT id, email, name, username, avatar_url, created_at
+      FROM users WHERE id = ${verification.user_id}
+    `;
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    const refreshToken = setAuthCookies(res, user);
+    await saveRefreshToken(sql, user.id, refreshToken);
+
+    res.json({ user });
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/auth/resend-verification ───────────────────────────────────────
+router.post('/resend-verification', resendVerificationLimiter, async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.json({ ok: true });
+
+    const sql = getDb();
+    const [user] = await sql`
+      SELECT id, email, name, email_verified_at FROM users WHERE email = LOWER(${email})
+    `;
+
+    if (user && !user.email_verified_at) {
+      await sendVerificationEmail(sql, user);
+    }
+
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // ── POST /api/auth/forgot-password ───────────────────────────────────────────
 router.post('/forgot-password', async (req, res, next) => {
   try {
@@ -315,16 +409,10 @@ router.post('/forgot-password', async (req, res, next) => {
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${rawToken}`;
 
     await resend.emails.send({
-      from:    'Padeleando <onboarding@resend.dev>',
+      from:    MAIL_FROM,
       to:      email,
       subject: 'Recuperá tu contraseña',
-      html: `
-        <p>Hola ${user.name},</p>
-        <p>Hacé click en el siguiente enlace para resetear tu contraseña.
-          El enlace expira en 1 hora.</p>
-        <a href="${resetUrl}">${resetUrl}</a>
-        <p>Si no solicitaste esto, ignorá este mail.</p>
-      `,
+      react:   createElement(ResetPasswordTemplate, { name: user.name, resetUrl }),
     });
 
     res.json({ ok: true });
