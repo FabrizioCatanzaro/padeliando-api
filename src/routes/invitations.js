@@ -128,9 +128,9 @@ router.patch('/:id', requireAuth, async (req, res, next) => {
     }
 
     if (action === 'accept') {
-      // Vincular el slot de jugador con la cuenta del usuario
       await sql`
-        UPDATE players SET user_id = ${req.user.id} WHERE id = ${invitation.player_id}
+        UPDATE players SET user_id = ${req.user.id}, name = ${req.user.name}
+        WHERE id = ${invitation.player_id}
       `;
     }
 
