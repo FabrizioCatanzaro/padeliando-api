@@ -113,6 +113,42 @@ router.get('/search', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/groups/nearby?lat=&lon=&radius= — grupos públicos con ubicación cercana (Haversine, radio en km)
+router.get('/nearby', async (req, res, next) => {
+  try {
+    const lat    = parseFloat(req.query.lat);
+    const lon    = parseFloat(req.query.lon);
+    const radius = Math.min(parseFloat(req.query.radius) || 20, 100);
+    if (isNaN(lat) || isNaN(lon)) return res.status(400).json({ error: 'lat y lon requeridos' });
+
+    const sql = getDb();
+    const groups = await sql`
+      SELECT g.id, g.name, g.description, g.emojis, g.location_name, g.lat, g.lon,
+             u.username AS owner_username, u.name AS owner_name,
+             ROUND(
+               (6371 * acos(
+                 LEAST(1, cos(radians(${lat})) * cos(radians(g.lat)) *
+                 cos(radians(g.lon) - radians(${lon})) +
+                 sin(radians(${lat})) * sin(radians(g.lat)))
+               ))::numeric, 1
+             ) AS distance_km
+      FROM groups g
+      JOIN users u ON u.id = g.user_id
+      WHERE g.is_public = true
+        AND g.lat IS NOT NULL
+        AND g.lon IS NOT NULL
+        AND (6371 * acos(
+          LEAST(1, cos(radians(${lat})) * cos(radians(g.lat)) *
+          cos(radians(g.lon) - radians(${lon})) +
+          sin(radians(${lat})) * sin(radians(g.lat)))
+        )) <= ${radius}
+      ORDER BY distance_km ASC
+      LIMIT 20
+    `;
+    res.json(groups);
+  } catch (err) { next(err); }
+});
+
 // GET /api/groups/:groupId/history — estadísticas históricas de todas las jornadas
 router.get('/:groupId/history', async (req, res, next) => {
   try {
@@ -289,14 +325,14 @@ router.get('/:groupId', async (req, res, next) => {
 // POST /api/groups — requiere auth
 router.post('/', requireAuth, async (req, res, next) => {
   try {
-    const { name, description, is_public = true, emojis = [] } = req.body;
+    const { name, description, is_public = true, emojis = [], location_name, place_id, lat, lon } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'name requerido' });
     if (name.trim().length > 30) return res.status(400).json({ error: 'El nombre del torneo no puede superar los 30 caracteres' });
     if (name.trim().length < 2) return res.status(400).json({ error: 'El nombre del torneo debe tener mas de 2 caracteres' });
     const sql = getDb();
     const [group] = await sql`
-      INSERT INTO groups (id, name, description, user_id, is_public, emojis)
-      VALUES (${uid()}, ${name.trim()}, ${description ?? null}, ${req.user.id}, ${is_public}, ${emojis})
+      INSERT INTO groups (id, name, description, user_id, is_public, emojis, location_name, place_id, lat, lon)
+      VALUES (${uid()}, ${name.trim()}, ${description ?? null}, ${req.user.id}, ${is_public}, ${emojis}, ${location_name ?? null}, ${place_id ?? null}, ${lat ?? null}, ${lon ?? null})
       RETURNING *
     `;
     res.status(201).json(group);
@@ -306,7 +342,7 @@ router.post('/', requireAuth, async (req, res, next) => {
 // PUT /api/groups/:groupId — solo el dueño
 router.put('/:groupId', requireAuth, async (req, res, next) => {
   try {
-    const { name, description, is_public, emojis } = req.body;
+    const { name, description, is_public, emojis, location_name, place_id, lat, lon } = req.body;
     if (name !== undefined && name.trim().length > 30) return res.status(400).json({ error: 'El nombre del torneo no puede superar los 30 caracteres' });
     if (name !== undefined && name.trim().length < 2) return res.status(400).json({ error: 'El nombre del torneo debe tener mas de 2 caracteres' });
     const sql = getDb();
@@ -319,7 +355,11 @@ router.put('/:groupId', requireAuth, async (req, res, next) => {
       SET name = COALESCE(${name ?? null}, name),
           description = COALESCE(${description ?? null}, description),
           is_public = COALESCE(${is_public ?? null}, is_public),
-          emojis = COALESCE(${emojis ?? null}, emojis)
+          emojis = COALESCE(${emojis ?? null}, emojis),
+          location_name = COALESCE(${location_name ?? null}, location_name),
+          place_id = COALESCE(${place_id ?? null}, place_id),
+          lat = COALESCE(${lat ?? null}, lat),
+          lon = COALESCE(${lon ?? null}, lon)
       WHERE id = ${req.params.groupId} RETURNING *
     `;
     res.json(updated);
