@@ -310,7 +310,7 @@ router.get('/me', async (req, res, next) => {
     const { id } = jwt.verify(token, SECRET);
     const sql = getDb();
     const [user] = await sql`
-      SELECT id, email, name, username, avatar_url, role, created_at FROM users WHERE id = ${id}
+      SELECT id, email, name, username, avatar_url, role, created_at, social_links FROM users WHERE id = ${id}
     `;
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
     const subscription = await getActiveSubscription(sql, id);
@@ -455,7 +455,7 @@ router.post('/reset-password', async (req, res, next) => {
 // ── PATCH /api/auth/me ────────────────────────────────────────────
 router.patch('/me', requireAuth, async (req, res, next) => {
   try {
-    const { name, username, current_password, new_password } = req.body;
+    const { name, username, current_password, new_password, social_links } = req.body;
     const sql = getDb();
 
     const [user] = await sql`SELECT * FROM users WHERE id = ${req.user.id}`;
@@ -484,6 +484,12 @@ router.patch('/me', requireAuth, async (req, res, next) => {
       updates.username = trimmed;
     }
 
+    // Redes sociales
+    if (social_links !== undefined) {
+      if (!Array.isArray(social_links)) return res.status(400).json({ error: 'social_links debe ser un arreglo' });
+      updates.social_links = JSON.stringify(social_links.filter(l => l.url?.trim()));
+    }
+
     // Cambio de contraseña
     if (new_password !== undefined) {
       if (!current_password)
@@ -506,7 +512,7 @@ router.patch('/me', requireAuth, async (req, res, next) => {
     const values = Object.values(updates);
     const setClauses = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
     const [updated] = await sql.query(
-      `UPDATE users SET ${setClauses} WHERE id = $${keys.length + 1} RETURNING id, name, username, avatar_url`,
+      `UPDATE users SET ${setClauses} WHERE id = $${keys.length + 1} RETURNING id, name, username, avatar_url, social_links`,
       [...values, req.user.id]
     );
 
