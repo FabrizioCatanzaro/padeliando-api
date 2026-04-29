@@ -4,7 +4,9 @@ import cors        from 'cors';
 import cookieParser from 'cookie-parser';
 import morgan      from 'morgan';
 
-import groupsRouter      from './routes/groups.js';
+import groupsRouter         from './routes/groups.js';
+import followsRouter        from './routes/follows.js';
+import notificationsRouter  from './routes/notifications.js';
 import playersRouter     from './routes/players.js';
 import tournamentsRouter from './routes/tournaments.js';
 import matchesRouter     from './routes/matches.js';
@@ -47,7 +49,9 @@ app.use('/api/tournaments/:tournamentId/photos', photosRouter);
 app.use('/api/matches',     matchesRouter);
 app.use('/api/pairs',       pairsRouter);
 app.use('/api/readonly',    readonlyRouter);
-app.use('/api/invitations',   invitationsRouter);
+app.use('/api/invitations',    invitationsRouter);
+app.use('/api/follows',        followsRouter);
+app.use('/api/notifications',  notificationsRouter);
 app.use('/api/subscriptions', subscriptionsRouter);
 app.use('/api/admin',         adminRouter);
 

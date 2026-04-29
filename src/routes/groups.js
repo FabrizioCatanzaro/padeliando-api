@@ -61,6 +61,17 @@ router.get('/user/:username', optionalAuth, async (req, res, next) => {
 
     const isOwner = req.user?.id === owner.id;
 
+    const [{ followers_count }] = await sql`
+      SELECT COUNT(*)::int AS followers_count FROM user_follows WHERE following_id = ${owner.id}
+    `;
+    const [{ following_count }] = await sql`
+      SELECT COUNT(*)::int AS following_count FROM user_follows WHERE follower_id = ${owner.id}
+    `;
+    const viewerId = req.user?.id ?? null;
+    const isFollowing = (!isOwner && viewerId)
+      ? (await sql`SELECT 1 FROM user_follows WHERE follower_id = ${viewerId} AND following_id = ${owner.id}`).length > 0
+      : false;
+
     const groups = await sql`
       SELECT g.*,
         (SELECT COUNT(DISTINCT tp.player_id)::int
@@ -82,7 +93,15 @@ router.get('/user/:username', optionalAuth, async (req, res, next) => {
           WHEN m.score1 > m.score2 AND (m.team1_p1 = p.id OR m.team1_p2 = p.id) THEN 1
           WHEN m.score2 > m.score1 AND (m.team2_p1 = p.id OR m.team2_p2 = p.id) THEN 1
           ELSE 0 END), 0)::int                AS victorias,
-        COUNT(DISTINCT CASE WHEN t.format = 'americano' THEN tp.tournament_id END)::int AS torneos_americanos
+        COUNT(DISTINCT CASE WHEN t.format = 'americano' THEN tp.tournament_id END)::int AS torneos_americanos,
+        COALESCE(SUM(CASE
+          WHEN m.team1_p1 = p.id OR m.team1_p2 = p.id THEN m.score1
+          WHEN m.team2_p1 = p.id OR m.team2_p2 = p.id THEN m.score2
+          ELSE 0 END), 0)::int AS games_favor,
+        COALESCE(SUM(CASE
+          WHEN m.team1_p1 = p.id OR m.team1_p2 = p.id THEN m.score2
+          WHEN m.team2_p1 = p.id OR m.team2_p2 = p.id THEN m.score1
+          ELSE 0 END), 0)::int AS games_contra
       FROM players p
       JOIN tournament_players tp ON tp.player_id = p.id
       JOIN tournaments t ON t.id = tp.tournament_id
@@ -91,6 +110,39 @@ router.get('/user/:username', optionalAuth, async (req, res, next) => {
           OR m.team2_p1 = p.id OR m.team2_p2 = p.id)
       WHERE p.user_id = ${owner.id}
     `;
+
+    // Actividad diaria para heatmap (últimos 365 días, solo owner)
+    const dailyActivity = isOwner ? await sql`
+      SELECT
+        m.played_at::date::text AS day,
+        COUNT(m.id)::int        AS partidos
+      FROM players p
+      JOIN matches m ON (m.team1_p1 = p.id OR m.team1_p2 = p.id
+        OR m.team2_p1 = p.id OR m.team2_p2 = p.id)
+      WHERE p.user_id = ${owner.id}
+        AND m.played_at IS NOT NULL
+        AND m.played_at >= CURRENT_DATE - INTERVAL '364 days'
+      GROUP BY m.played_at::date
+      ORDER BY m.played_at::date ASC
+    ` : [];
+
+    // Estadísticas mensuales (últimos 12 meses)
+    const monthlyStats = isOwner ? await sql`
+      SELECT
+        TO_CHAR(DATE_TRUNC('month', m.played_at), 'YYYY-MM') AS month,
+        COUNT(m.id)::int AS partidos,
+        COALESCE(SUM(CASE
+          WHEN m.score1 > m.score2 AND (m.team1_p1 = p.id OR m.team1_p2 = p.id) THEN 1
+          WHEN m.score2 > m.score1 AND (m.team2_p1 = p.id OR m.team2_p2 = p.id) THEN 1
+          ELSE 0 END), 0)::int AS victorias
+      FROM players p
+      JOIN matches m ON (m.team1_p1 = p.id OR m.team1_p2 = p.id
+        OR m.team2_p1 = p.id OR m.team2_p2 = p.id)
+      WHERE p.user_id = ${owner.id}
+        AND m.played_at >= DATE_TRUNC('month', NOW()) - INTERVAL '11 months'
+      GROUP BY DATE_TRUNC('month', m.played_at)
+      ORDER BY DATE_TRUNC('month', m.played_at) ASC
+    ` : [];
 
     const matchResults = await sql`
       SELECT
@@ -214,11 +266,19 @@ router.get('/user/:username', optionalAuth, async (req, res, next) => {
     `;
 
     const sub = await getActiveSubscription(sql, owner.id);
-    const baseStats = playerStats ?? { torneos: 0, partidos: 0, victorias: 0, torneos_americanos: 0 };
+    const baseStats = playerStats ?? { torneos: 0, partidos: 0, victorias: 0, torneos_americanos: 0, games_favor: 0, games_contra: 0 };
     res.json({
-      owner: { ...owner, is_premium: sub.plan === 'premium' },
+      owner: { ...owner, is_premium: sub.plan === 'premium', followers_count, following_count },
+      is_following: isFollowing,
       groups,
-      stats: { ...baseStats, racha, racha_max: rachaMax, campeon_americano: americanoChamp?.campeon_americano ?? 0 },
+      stats: {
+        ...baseStats,
+        racha,
+        racha_max: rachaMax,
+        campeon_americano: americanoChamp?.campeon_americano ?? 0,
+      },
+      monthly_stats:  monthlyStats,
+      daily_activity: dailyActivity,
       recent_matches: recentMatches,
       frequent_partners: frequentPartners,
     });

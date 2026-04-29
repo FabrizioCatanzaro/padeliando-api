@@ -58,6 +58,14 @@ router.post('/', requireAuth, async (req, res, next) => {
       RETURNING *
     `;
 
+    // Notificar al usuario invitado si fue encontrado
+    if (invitedUser?.id) {
+      await sql`
+        INSERT INTO notifications (id, user_id, type, actor_id, entity_id)
+        VALUES (${uid()}, ${invitedUser.id}, 'invitation', ${req.user.id}, ${invitation.id})
+      `;
+    }
+
     res.status(201).json({ invitation, found: !!invitedUser });
   } catch (err) { next(err); }
 });
