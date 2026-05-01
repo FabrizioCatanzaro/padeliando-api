@@ -4,7 +4,9 @@ import cors        from 'cors';
 import cookieParser from 'cookie-parser';
 import morgan      from 'morgan';
 
-import groupsRouter      from './routes/groups.js';
+import groupsRouter         from './routes/groups.js';
+import followsRouter        from './routes/follows.js';
+import notificationsRouter  from './routes/notifications.js';
 import playersRouter     from './routes/players.js';
 import tournamentsRouter from './routes/tournaments.js';
 import matchesRouter     from './routes/matches.js';
@@ -12,8 +14,10 @@ import pairsRouter       from './routes/pairs.js';
 import readonlyRouter    from './routes/readonly.js';
 import authRouter        from './routes/auth.js';
 import invitationsRouter    from './routes/invitations.js';
+import joinRequestsRouter   from './routes/join-requests.js';
 import subscriptionsRouter  from './routes/subscriptions.js';
 import photosRouter         from './routes/photos.js';
+import adminRouter          from './routes/admin.js';
 import { getDb } from './db.js';
 
 const app  = express();
@@ -46,8 +50,12 @@ app.use('/api/tournaments/:tournamentId/photos', photosRouter);
 app.use('/api/matches',     matchesRouter);
 app.use('/api/pairs',       pairsRouter);
 app.use('/api/readonly',    readonlyRouter);
-app.use('/api/invitations',   invitationsRouter);
+app.use('/api/invitations',    invitationsRouter);
+app.use('/api/join-requests',  joinRequestsRouter);
+app.use('/api/follows',        followsRouter);
+app.use('/api/notifications',  notificationsRouter);
 app.use('/api/subscriptions', subscriptionsRouter);
+app.use('/api/admin',         adminRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 

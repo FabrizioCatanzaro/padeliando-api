@@ -11,7 +11,15 @@ router.get('/:id', async (req, res, next) => {
     const sql = getDb();
     const { id } = req.params;
 
-    const [tournament] = await sql`SELECT * FROM tournaments WHERE id = ${id}`;
+    const [tournament] = await sql`
+      SELECT t.*,
+             (EXISTS (
+               SELECT 1 FROM subscriptions s
+               JOIN   groups g ON g.user_id = s.user_id
+               WHERE  g.id = t.group_id AND s.plan = 'premium' AND s.status = 'active'
+             )) AS owner_is_premium
+      FROM tournaments t WHERE t.id = ${id}
+    `;
     if (!tournament) return res.status(404).json({ error: 'Torneo no encontrado' });
 
     const pairs = await sql`SELECT * FROM pairs WHERE tournament_id = ${id}`;
@@ -28,12 +36,14 @@ router.get('/:id', async (req, res, next) => {
         u.username   AS linked_username,
         u.name       AS linked_name,
         u.avatar_url AS linked_avatar_url,
+        (s.id IS NOT NULL) AS is_premium,
         pi.id        AS invitation_id,
         pi.status    AS invitation_status,
         pi.invited_identifier
       FROM players p
       INNER JOIN tournament_players tp ON tp.player_id = p.id AND tp.tournament_id = ${id}
       LEFT JOIN users u ON u.id = p.user_id
+      LEFT JOIN subscriptions s ON s.user_id = u.id AND s.status = 'active' AND s.plan = 'premium'
       LEFT JOIN player_invitations pi
         ON pi.player_id = p.id AND pi.group_id = ${tournament.group_id} AND pi.status = 'pending'
     `;
@@ -51,9 +61,11 @@ router.get('/:id', async (req, res, next) => {
 
     const removedPlayers = orphanIds.length
       ? await sql`
-          SELECT p.*, u.avatar_url AS linked_avatar_url
+          SELECT p.*, u.name AS linked_name, u.avatar_url AS linked_avatar_url,
+                 (s.id IS NOT NULL) AS is_premium
           FROM   players p
           LEFT   JOIN users u ON u.id = p.user_id
+          LEFT   JOIN subscriptions s ON s.user_id = u.id AND s.status = 'active' AND s.plan = 'premium'
           WHERE  p.id = ANY(${orphanIds})
         `
       : [];

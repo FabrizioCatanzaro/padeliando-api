@@ -8,7 +8,7 @@ const mp = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
 
 const MP_PLANS = {
   monthly:   { frequency: 1,  frequency_type: 'months', price: () => Number(process.env.MP_PRICE_MONTHLY),   reason: 'Padeleando Premium - Plan Mensual' },
-  quarterly: { frequency: 3,  frequency_type: 'months', price: () => Number(process.env.MP_PRICE_QUARTERLY), reason: 'Padeleando Premium - Plan Trimestral' },
+  //quarterly: { frequency: 3,  frequency_type: 'months', price: () => Number(process.env.MP_PRICE_QUARTERLY), reason: 'Padeleando Premium - Plan Trimestral' },
   annual:    { frequency: 12, frequency_type: 'months', price: () => Number(process.env.MP_PRICE_ANNUAL),    reason: 'Padeleando Premium - Plan Anual' },
 };
 
@@ -17,9 +17,8 @@ const router = Router();
 // Duraciones por tipo de billing
 const BILLING_DURATIONS = {
   monthly:   30,
-  quarterly: 90,
   annual:    365,
-  trial:     14,
+  trial:     7,
 };
 
 // ── Helper: obtener la suscripción activa de un usuario ───────────────────────

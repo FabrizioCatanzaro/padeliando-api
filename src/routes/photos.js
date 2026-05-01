@@ -24,10 +24,10 @@ router.get('/', async (req, res, next) => {
   try {
     const sql = getDb();
     const photos = await sql`
-      SELECT id, tournament_id, uploaded_by, url, caption, created_at
+      SELECT id, tournament_id, uploaded_by, url, caption, created_at, is_cover
       FROM   tournament_photos
       WHERE  tournament_id = ${req.params.tournamentId}
-      ORDER  BY created_at DESC
+      ORDER  BY is_cover DESC, created_at DESC
     `;
     res.json(photos);
   } catch (err) { next(err); }
@@ -65,7 +65,7 @@ router.post('/', requireAuth, requirePremium, uploadTournamentPhoto, async (req,
     const [photo] = await sql`
       INSERT INTO tournament_photos (id, tournament_id, uploaded_by, url, public_id, caption)
       VALUES (${uid()}, ${tournamentId}, ${req.user.id}, ${result.secure_url}, ${result.public_id}, ${caption})
-      RETURNING id, tournament_id, uploaded_by, url, caption, created_at
+      RETURNING id, tournament_id, uploaded_by, url, caption, created_at, is_cover
     `;
 
     res.status(201).json(photo);
@@ -96,9 +96,36 @@ router.patch('/:photoId', requireAuth, async (req, res, next) => {
       UPDATE tournament_photos
       SET    caption = ${newCaption}
       WHERE  id = ${photoId}
-      RETURNING id, tournament_id, uploaded_by, url, caption, created_at
+      RETURNING id, tournament_id, uploaded_by, url, caption, created_at, is_cover
     `;
     res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/tournaments/:tournamentId/photos/:photoId/cover — establecer portada (solo dueño)
+router.patch('/:photoId/cover', requireAuth, async (req, res, next) => {
+  try {
+    const { tournamentId, photoId } = req.params;
+    const sql = getDb();
+
+    const [photo] = await sql`
+      SELECT p.id, g.user_id AS group_owner_id
+      FROM   tournament_photos p
+      JOIN   tournaments t ON t.id = p.tournament_id
+      JOIN   groups      g ON g.id = t.group_id
+      WHERE  p.id = ${photoId} AND p.tournament_id = ${tournamentId}
+    `;
+    if (!photo) return res.status(404).json({ error: 'Foto no encontrada' });
+    if (photo.group_owner_id !== req.user.id)
+      return res.status(403).json({ error: 'Sin permiso' });
+
+    await sql`
+      UPDATE tournament_photos
+      SET    is_cover = (id = ${photoId})
+      WHERE  tournament_id = ${tournamentId}
+    `;
+
+    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 

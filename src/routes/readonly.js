@@ -28,10 +28,12 @@ router.get('/:tournamentId', async (req, res, next) => {
  
     // Canonical player list from tournament_players table
     const tpPlayers = await sql`
-      SELECT p.id, p.name, u.avatar_url AS linked_avatar_url
+      SELECT p.id, p.name, u.name AS linked_name, u.username AS linked_username, u.avatar_url AS linked_avatar_url,
+             (s.id IS NOT NULL) AS is_premium
       FROM   players p
       INNER JOIN tournament_players tp ON tp.player_id = p.id AND tp.tournament_id = ${tournamentId}
       LEFT  JOIN users u ON u.id = p.user_id
+      LEFT  JOIN subscriptions s ON s.user_id = u.id AND s.status = 'active' AND s.plan = 'premium'
     `;
 
     // Backward-compat: also include any players from matches/pairs not in tournament_players
@@ -45,9 +47,11 @@ router.get('/:tournamentId', async (req, res, next) => {
 
     const extraPlayers = extraIds.length
       ? await sql`
-          SELECT p.id, p.name, u.avatar_url AS linked_avatar_url
+          SELECT p.id, p.name, u.name AS linked_name, u.username AS linked_username, u.avatar_url AS linked_avatar_url,
+                 (s.id IS NOT NULL) AS is_premium
           FROM   players p
           LEFT   JOIN users u ON u.id = p.user_id
+          LEFT   JOIN subscriptions s ON s.user_id = u.id AND s.status = 'active' AND s.plan = 'premium'
           WHERE  p.id = ANY(${extraIds})
         `
       : [];

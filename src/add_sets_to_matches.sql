@@ -1,0 +1,3 @@
+ALTER TABLE matches
+  ADD COLUMN IF NOT EXISTS sets_format SMALLINT,
+  ADD COLUMN IF NOT EXISTS sets        JSONB;

@@ -104,6 +104,23 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url       TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_public_id TEXT;
 
+-- Confirmación de email (registro con email/password)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+
+-- Rol de usuario (acceso a dashboard de administración)
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'
+    CHECK (role IN ('user', 'admin'));
+
+CREATE TABLE IF NOT EXISTS email_verifications (
+  id         TEXT        PRIMARY KEY,
+  user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT        NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used       BOOLEAN     NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Fotos de jornada (solo usuarios premium pueden subirlas)
 CREATE TABLE IF NOT EXISTS tournament_photos (
   id            TEXT PRIMARY KEY,
@@ -125,3 +142,4 @@ CREATE INDEX IF NOT EXISTS idx_invitations_user      ON player_invitations(invit
 CREATE INDEX IF NOT EXISTS idx_invitations_player    ON player_invitations(player_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user    ON subscriptions(user_id);
 CREATE INDEX IF NOT EXISTS idx_tournament_photos_tournament ON tournament_photos(tournament_id);
+CREATE INDEX IF NOT EXISTS idx_email_verifications_user    ON email_verifications(user_id);
