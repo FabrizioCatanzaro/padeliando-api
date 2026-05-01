@@ -357,7 +357,7 @@ router.get('/:groupId/history', async (req, res, next) => {
     const result = [];
     for (const t of tournaments) {
       const players = await sql`
-        SELECT p.id, p.name, u.name AS linked_name, u.avatar_url AS linked_avatar_url
+        SELECT p.id, p.name, u.name AS linked_name, u.username AS linked_username, u.avatar_url AS linked_avatar_url
         FROM   players p
         JOIN   tournament_players tp ON tp.player_id = p.id AND tp.tournament_id = ${t.id}
         LEFT   JOIN users u ON u.id = p.user_id
@@ -382,7 +382,11 @@ router.get('/:groupId', async (req, res, next) => {
     const sql = getDb();
 
     const [group] = await sql`
-      SELECT g.*, u.username AS owner_username, u.name AS owner_name, u.avatar_url AS owner_avatar_url
+      SELECT g.*, u.username AS owner_username, u.name AS owner_name, u.avatar_url AS owner_avatar_url,
+             (EXISTS (
+               SELECT 1 FROM subscriptions s
+               WHERE s.user_id = g.user_id AND s.plan = 'premium' AND s.status = 'active'
+             )) AS owner_is_premium
       FROM groups g
       JOIN users u ON u.id = g.user_id
       WHERE g.id = ${groupId}

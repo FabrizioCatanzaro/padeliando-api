@@ -11,7 +11,15 @@ router.get('/:id', async (req, res, next) => {
     const sql = getDb();
     const { id } = req.params;
 
-    const [tournament] = await sql`SELECT * FROM tournaments WHERE id = ${id}`;
+    const [tournament] = await sql`
+      SELECT t.*,
+             (EXISTS (
+               SELECT 1 FROM subscriptions s
+               JOIN   groups g ON g.user_id = s.user_id
+               WHERE  g.id = t.group_id AND s.plan = 'premium' AND s.status = 'active'
+             )) AS owner_is_premium
+      FROM tournaments t WHERE t.id = ${id}
+    `;
     if (!tournament) return res.status(404).json({ error: 'Torneo no encontrado' });
 
     const pairs = await sql`SELECT * FROM pairs WHERE tournament_id = ${id}`;

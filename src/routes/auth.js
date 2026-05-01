@@ -58,18 +58,18 @@ function setAuthCookies(res, user) {
     SECRET,
     { expiresIn: '1h' }
   );
-  // Refresh token: larga duración (30 días), opaco
+  // Refresh token: 3 horas, opaco
   const refreshToken = crypto.randomBytes(40).toString('hex');
 
   res.cookie('access_token',  accessToken,  cookieOpts(60 * 60 * 1000));
-  res.cookie('refresh_token', refreshToken, cookieOpts(30 * 24 * 60 * 60 * 1000));
+  res.cookie('refresh_token', refreshToken, cookieOpts(3 * 60 * 60 * 1000));
 
   return refreshToken;
 }
 
 async function saveRefreshToken(sql, userId, rawToken) {
   const hash      = crypto.createHash('sha256').update(rawToken).digest('hex');
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + 3 * 60 * 60 * 1000);
   await sql`
     INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at)
     VALUES (${uid()}, ${userId}, ${hash}, ${expiresAt})
