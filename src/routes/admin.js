@@ -1,7 +1,11 @@
-import { Router } from 'express';
-import { getDb } from '../db.js';
-import { uid }   from '../uid.js';
+import { Router }  from 'express';
+import { Resend }   from 'resend';
+import { getDb }    from '../db.js';
+import { uid }      from '../uid.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
+
+const resend    = new Resend(process.env.RESEND_API_KEY);
+const MAIL_FROM = process.env.MAIL_FROM || 'Padeleando <onboarding@resend.dev>';
 
 const router = Router();
 
@@ -213,6 +217,128 @@ router.post('/users/:id/revoke-premium', async (req, res, next) => {
     `;
 
     res.json({ ok: true, cancelled: result.length ?? result.count ?? 0 });
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/admin/broadcast ────────────────────────────────────────────────
+// Envía una notificación de admin a un grupo de usuarios.
+// Body: { title, body, target: 'all'|'free'|'premium'|'user', target_user_id?, channel: 'app'|'app_email' }
+router.post('/broadcast', async (req, res, next) => {
+  try {
+    const sql = getDb();
+    const { title, body, target, target_user_id, channel } = req.body;
+
+    if (!title?.trim() || !body?.trim())
+      return res.status(400).json({ error: 'Título y cuerpo son requeridos' });
+    if (!['all', 'free', 'premium', 'user'].includes(target))
+      return res.status(400).json({ error: 'Target inválido' });
+    if (!['app', 'app_email'].includes(channel))
+      return res.status(400).json({ error: 'Canal inválido' });
+    if (target === 'user' && !target_user_id)
+      return res.status(400).json({ error: 'target_user_id requerido para target=user' });
+
+    let users;
+    if (target === 'all') {
+      users = await sql`SELECT id, email, name FROM users WHERE email_verified_at IS NOT NULL`;
+    } else if (target === 'free') {
+      users = await sql`
+        SELECT u.id, u.email, u.name FROM users u
+        WHERE u.email_verified_at IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM subscriptions s
+            WHERE s.user_id = u.id AND s.plan = 'premium' AND s.status = 'active'
+              AND (s.ends_at IS NULL OR s.ends_at > NOW())
+          )
+      `;
+    } else if (target === 'premium') {
+      users = await sql`
+        SELECT u.id, u.email, u.name FROM users u
+        WHERE u.email_verified_at IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM subscriptions s
+            WHERE s.user_id = u.id AND s.plan = 'premium' AND s.status = 'active'
+              AND (s.ends_at IS NULL OR s.ends_at > NOW())
+          )
+      `;
+    } else {
+      users = await sql`SELECT id, email, name FROM users WHERE id = ${target_user_id}`;
+      if (!users.length) return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    if (!users.length)
+      return res.status(400).json({ error: 'No hay usuarios destino para ese segmento' });
+
+    const t = title.trim();
+    const b = body.trim();
+
+    // Insertar notificaciones en app
+    for (const u of users) {
+      await sql`
+        INSERT INTO notifications (id, user_id, type, title, body)
+        VALUES (${uid()}, ${u.id}, 'admin_message', ${t}, ${b})
+      `;
+    }
+
+    // Enviar emails si corresponde
+    if (channel === 'app_email') {
+      const batchSize = 50;
+      for (let i = 0; i < users.length; i += batchSize) {
+        const batch = users.slice(i, i + batchSize);
+        await Promise.allSettled(batch.map(u =>
+          resend.emails.send({
+            from:    MAIL_FROM,
+            to:      u.email,
+            subject: `[Padeleando] ${t}`,
+            html: `
+              <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px">
+                <h2 style="color:#e8f04a;margin-bottom:8px">${t}</h2>
+                <p style="color:#ccc;font-size:15px;line-height:1.6;white-space:pre-wrap">${b}</p>
+                <hr style="border-color:#333;margin:24px 0"/>
+                <p style="color:#555;font-size:12px">Este mensaje fue enviado desde el equipo de Padeleando.</p>
+              </div>
+            `,
+          })
+        ));
+      }
+    }
+
+    // Guardar en historial
+    const [broadcast] = await sql`
+      INSERT INTO admin_broadcasts (id, admin_id, title, body, target, target_user_id, channel, recipients)
+      VALUES (${uid()}, ${req.user.id}, ${t}, ${b}, ${target}, ${target_user_id ?? null}, ${channel}, ${users.length})
+      RETURNING *
+    `;
+
+    res.status(201).json({ ok: true, recipients: users.length, broadcast });
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/admin/broadcasts ────────────────────────────────────────────────
+// Historial de broadcasts enviados. Query params: page, limit
+router.get('/broadcasts', async (req, res, next) => {
+  try {
+    const sql    = getDb();
+    const page   = Math.max(1, parseInt(req.query.page ?? '1', 10) || 1);
+    const limit  = Math.min(50, Math.max(1, parseInt(req.query.limit ?? '20', 10) || 20));
+    const offset = (page - 1) * limit;
+
+    const broadcasts = await sql`
+      SELECT
+        b.*,
+        u.name     AS admin_name,
+        u.username AS admin_username,
+        tu.name     AS target_user_name,
+        tu.username AS target_user_username
+      FROM admin_broadcasts b
+      JOIN  users u  ON u.id  = b.admin_id
+      LEFT JOIN users tu ON tu.id = b.target_user_id
+      ORDER BY b.created_at DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+
+    const [{ total }] = await sql`SELECT COUNT(*)::int AS total FROM admin_broadcasts`;
+
+    res.json({ broadcasts, total, page, limit });
   } catch (err) { next(err); }
 });
 
