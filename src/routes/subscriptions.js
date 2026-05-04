@@ -6,10 +6,9 @@ import { MercadoPagoConfig, PreApproval } from 'mercadopago';
 
 const mp = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
 
-const MP_PLANS = {
-  monthly:   { frequency: 1,  frequency_type: 'months', price: () => Number(process.env.MP_PRICE_MONTHLY),   reason: 'Padeleando Premium - Plan Mensual' },
-  //quarterly: { frequency: 3,  frequency_type: 'months', price: () => Number(process.env.MP_PRICE_QUARTERLY), reason: 'Padeleando Premium - Plan Trimestral' },
-  annual:    { frequency: 12, frequency_type: 'months', price: () => Number(process.env.MP_PRICE_ANNUAL),    reason: 'Padeleando Premium - Plan Anual' },
+const MP_PLAN_IDS = {
+  monthly: () => process.env.MP_PLAN_ID_MONTHLY,
+  annual:  () => process.env.MP_PLAN_ID_ANNUAL,
 };
 
 const router = Router();
@@ -25,7 +24,7 @@ const BILLING_DURATIONS = {
 // Retorna { plan, billing_period, status, starts_at, ends_at } o plan free por defecto
 export async function getActiveSubscription(sql, userId) {
   const [sub] = await sql`
-    SELECT id, plan, billing_period, status, starts_at, ends_at
+    SELECT id, plan, billing_period, status, starts_at, ends_at AS plan_ends_at
     FROM subscriptions
     WHERE user_id   = ${userId}
       AND status    = 'active'
@@ -33,7 +32,7 @@ export async function getActiveSubscription(sql, userId) {
     ORDER BY created_at DESC
     LIMIT 1
   `;
-  return sub ?? { plan: 'free', billing_period: null, status: 'active', starts_at: null, ends_at: null };
+  return sub ?? { plan: 'free', billing_period: null, status: 'active', starts_at: null, plan_ends_at: null };
 }
 
 // ── GET /api/subscriptions/me ─────────────────────────────────────────────────
@@ -96,39 +95,23 @@ router.post('/grant', async (req, res, next) => {
 // Crea un PreApproval en MP y devuelve la URL de pago (init_point).
 router.post('/checkout', requireAuth, async (req, res, next) => {
   try {
-    const { billing_period } = req.body;
-    const plan = MP_PLANS[billing_period];
-    if (!plan)
-      return res.status(400).json({ error: 'billing_period debe ser monthly, quarterly o annual' });
-    
+    const { billing_period, mp_email } = req.body;
+    const planId = MP_PLAN_IDS[billing_period]?.();
+    if (!planId)
+      return res.status(400).json({ error: 'billing_period debe ser monthly o annual' });
+    if (!mp_email)
+      return res.status(400).json({ error: 'mp_email es requerido (email de tu cuenta de Mercado Pago)' });
+
     const sql = getDb();
 
-    // Obtener el email del usuario (puede no venir en req.user)
-    const [user] = await sql`SELECT email FROM users WHERE id = ${req.user.id}`;
-
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-
-    const preapproval = await new PreApproval(mp).create({
-      body: {
-        back_url: process.env.BACK_URL,
-        reason: plan.reason,
-        auto_recurring: {
-          frequency:          plan.frequency,
-          frequency_type:     plan.frequency_type,
-          transaction_amount: plan.price(),
-          currency_id:        'ARS',
-        },
-        payer_email: user.email,
-        status:      'pending',
-      },
-    });
-
+    // Guardar suscripción pendiente — el mp_preapproval_id se setea en el webhook
     await sql`
-      INSERT INTO subscriptions (id, user_id, plan, billing_period, status, mp_preapproval_id)
-      VALUES (${uid()}, ${req.user.id}, 'premium', ${billing_period}, 'pending', ${preapproval.id})
+      INSERT INTO subscriptions (id, user_id, plan, billing_period, status, mp_email)
+      VALUES (${uid()}, ${req.user.id}, 'premium', ${billing_period}, 'pending', LOWER(${mp_email}))
     `;
 
-    res.json({ init_point: preapproval.init_point });
+    const init_point = `https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_plan_id=${planId}`;
+    res.json({ init_point });
   } catch (err) { next(err); }
 });
 
@@ -142,14 +125,42 @@ router.post('/webhook', async (req, res) => {
       const preapproval = await new PreApproval(mp).get({ id: body.data.id });
       const sql = getDb();
 
-      const [sub] = await sql`
-        SELECT id, user_id FROM subscriptions
+      // Determinar billing_period según el plan
+      const PLAN_BILLING = {
+        [process.env.MP_PLAN_ID_MONTHLY]: 'monthly',
+        [process.env.MP_PLAN_ID_ANNUAL]:  'annual',
+      };
+      const billing_period = PLAN_BILLING[preapproval.preapproval_plan_id];
+
+      // Buscar por mp_preapproval_id (ya vinculado) o por payer_email + pending
+      let [sub] = await sql`
+        SELECT id, user_id, billing_period FROM subscriptions
         WHERE mp_preapproval_id = ${preapproval.id}
       `;
 
+      if (!sub && preapproval.payer_email) {
+        [sub] = await sql`
+          SELECT id, user_id, billing_period FROM subscriptions
+          WHERE mp_email = LOWER(${preapproval.payer_email})
+            AND status   = 'pending'
+            AND (${billing_period ?? null}::text IS NULL OR billing_period = ${billing_period ?? null})
+          ORDER BY created_at DESC
+          LIMIT 1
+        `;
+        if (sub) {
+          await sql`
+            UPDATE subscriptions SET mp_preapproval_id = ${preapproval.id}
+            WHERE id = ${sub.id}
+          `;
+        }
+      }
+
       if (sub) {
         if (preapproval.status === 'authorized') {
-          // Expirar otras suscripciones activas del usuario
+          const PERIOD_DAYS = { monthly: 30, annual: 365 };
+          const days = PERIOD_DAYS[sub.billing_period ?? billing_period] ?? 30;
+          const ends_at = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+
           await sql`
             UPDATE subscriptions
             SET status = 'expired'
@@ -158,7 +169,7 @@ router.post('/webhook', async (req, res) => {
               AND id     != ${sub.id}
           `;
           await sql`
-            UPDATE subscriptions SET status = 'active'
+            UPDATE subscriptions SET status = 'active', ends_at = ${ends_at}
             WHERE id = ${sub.id}
           `;
         } else if (preapproval.status === 'cancelled' || preapproval.status === 'paused') {
@@ -174,6 +185,57 @@ router.post('/webhook', async (req, res) => {
   }
 
   res.sendStatus(200);
+});
+
+// ── GET /api/subscriptions/sync ──────────────────────────────────────────────
+// Consulta MP activamente para activar una suscripción pendiente.
+// Lo llama el frontend al volver del checkout, como fallback al webhook.
+router.get('/sync', requireAuth, async (req, res, next) => {
+  try {
+    const sql = getDb();
+
+    const [pendingSub] = await sql`
+      SELECT id, billing_period, mp_email FROM subscriptions
+      WHERE user_id = ${req.user.id} AND status = 'pending'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+
+    if (!pendingSub) return res.json({ synced: false });
+
+    const planIds = [
+      process.env.MP_PLAN_ID_MONTHLY,
+      process.env.MP_PLAN_ID_ANNUAL,
+    ].filter(Boolean);
+
+    // Buscar en MP preapprovals autorizados para este email
+    const search = await new PreApproval(mp).search({
+      filters: { payer_email: pendingSub.mp_email },
+    });
+
+    const authorized = search.results?.find(
+      (p) => p.status === 'authorized' && planIds.includes(p.preapproval_plan_id)
+    );
+
+    if (!authorized) return res.json({ synced: false });
+
+    const PERIOD_DAYS = { monthly: 30, annual: 365 };
+    const days = PERIOD_DAYS[pendingSub.billing_period] ?? 30;
+    const ends_at = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+
+    await sql`
+      UPDATE subscriptions
+      SET status = 'expired'
+      WHERE user_id = ${req.user.id} AND status = 'active' AND id != ${pendingSub.id}
+    `;
+    await sql`
+      UPDATE subscriptions
+      SET status = 'active', mp_preapproval_id = ${authorized.id}, ends_at = ${ends_at}
+      WHERE id = ${pendingSub.id}
+    `;
+
+    res.json({ synced: true });
+  } catch (err) { next(err); }
 });
 
 // ── POST /api/subscriptions/cancel ───────────────────────────────────────────
@@ -193,7 +255,12 @@ router.post('/cancel', requireAuth, async (req, res, next) => {
 
     if (!sub) return res.status(404).json({ error: 'No hay suscripción activa de Mercado Pago' });
 
-    await new PreApproval(mp).update({ id: sub.mp_preapproval_id, body: { status: 'cancelled' } });
+    try {
+      await new PreApproval(mp).update({ id: sub.mp_preapproval_id, body: { status: 'cancelled' } });
+    } catch (_) {
+      // Si MP ya canceló el preapproval (ej: el usuario canceló desde su cuenta de MP),
+      // ignoramos el error y actualizamos la DB de todas formas.
+    }
 
     await sql`
       UPDATE subscriptions SET status = 'cancelled'
