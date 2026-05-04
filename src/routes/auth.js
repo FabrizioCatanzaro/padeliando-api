@@ -212,7 +212,8 @@ router.post('/login', loginLimiter, async (req, res, next) => {
     const refreshToken = setAuthCookies(res, safeUser);
     await saveRefreshToken(sql, user.id, refreshToken);
 
-    res.json({ user: safeUser });
+    const subscription = await getActiveSubscription(sql, user.id);
+    res.json({ user: { ...safeUser, subscription } });
   } catch (err) { next(err); }
 });
 
@@ -253,7 +254,8 @@ router.post('/google', async (req, res, next) => {
     const refreshToken = setAuthCookies(res, safeUser);
     await saveRefreshToken(sql, user.id, refreshToken);
 
-    res.json({ user: safeUser });
+    const subscription = await getActiveSubscription(sql, user.id);
+    res.json({ user: { ...safeUser, subscription } });
   } catch (err) { next(err); }
 });
 
@@ -283,7 +285,8 @@ router.post('/refresh', async (req, res, next) => {
     const newRefreshToken = setAuthCookies(res, user);
     await saveRefreshToken(sql, user.id, newRefreshToken);
 
-    res.json({ user });
+    const subscription = await getActiveSubscription(sql, user.id);
+    res.json({ user: { ...user, subscription } });
   } catch (err) { next(err); }
 });
 
