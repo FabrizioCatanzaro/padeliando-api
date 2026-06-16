@@ -1,3 +1,5 @@
+CREATE EXTENSION IF NOT EXISTS unaccent;
+
 -- Grupos de amigos
 CREATE TABLE IF NOT EXISTS groups (
   id          TEXT        PRIMARY KEY,
