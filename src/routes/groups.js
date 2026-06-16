@@ -56,7 +56,7 @@ router.get('/participating', requireAuth, async (req, res, next) => {
 router.get('/user/:username', optionalAuth, async (req, res, next) => {
   try {
     const sql = getDb();
-    const [owner] = await sql`SELECT id, name, username, avatar_url, created_at, social_links FROM users WHERE username = ${req.params.username}`;
+    const [owner] = await sql`SELECT id, name, username, avatar_url, created_at, social_links, bio FROM users WHERE username = ${req.params.username}`;
     if (!owner) return res.status(404).json({ error: 'Usuario no encontrado' });
 
     const isOwner = req.user?.id === owner.id;
@@ -235,7 +235,7 @@ router.get('/user/:username', optionalAuth, async (req, res, next) => {
       JOIN players pd ON pd.id = m.team2_p2 LEFT JOIN users u2b ON u2b.id = pd.user_id
       WHERE p.user_id = ${owner.id}
       ORDER BY m.played_at DESC, m.created_at DESC
-      LIMIT 5
+      LIMIT 20
     `;
 
     const frequentPartners = await sql`
@@ -394,9 +394,14 @@ router.get('/:groupId', async (req, res, next) => {
     if (!group) return res.status(404).json({ error: 'Grupo no encontrado' });
 
     const tournaments = await sql`
-      SELECT t.*, COUNT(m.id)::int AS match_count
+      SELECT t.*,
+             COUNT(DISTINCT m.id)::int  AS match_count,
+             COUNT(DISTINCT tp.player_id)::int AS player_count,
+             COUNT(DISTINCT pr.id)::int AS pair_count
       FROM   tournaments t
-      LEFT JOIN matches m ON m.tournament_id = t.id
+      LEFT JOIN matches           m  ON m.tournament_id  = t.id
+      LEFT JOIN tournament_players tp ON tp.tournament_id = t.id
+      LEFT JOIN pairs             pr ON pr.tournament_id = t.id
       WHERE  t.group_id = ${groupId}
       GROUP  BY t.id
       ORDER  BY t.created_at DESC

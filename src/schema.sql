@@ -106,6 +106,9 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url       TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_public_id TEXT;
 
+-- Bio libre del usuario (hasta 200 chars)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
+
 -- Confirmación de email (registro con email/password)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 
