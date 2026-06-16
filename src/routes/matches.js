@@ -7,7 +7,7 @@ const router = Router();
 // POST /api/matches
 router.post('/', async (req, res, next) => {
   try {
-    const { tournamentId, team1, team2, score1, score2, playedAt, duration_seconds, sets, sets_format } = req.body;
+    const { tournamentId, team1, team2, score1, score2, playedAt, duration_seconds, sets, sets_format, court } = req.body;
 
     if (!tournamentId || !team1?.[0] || !team1?.[1] || !team2?.[0] || !team2?.[1]) {
       return res.status(400).json({ error: 'Datos incompletos' });
@@ -23,12 +23,12 @@ router.post('/', async (req, res, next) => {
     const [match] = await sql`
       INSERT INTO matches
         (id, tournament_id, team1_p1, team1_p2, team2_p1, team2_p2,
-         score1, score2, played_at, duration_seconds, sets_format, sets)
+         score1, score2, played_at, duration_seconds, sets_format, sets, court)
       VALUES
         (${uid()}, ${tournamentId},
          ${team1[0]}, ${team1[1]}, ${team2[0]}, ${team2[1]},
          ${score1}, ${score2}, ${playedAt ?? today}, ${duration_seconds},
-         ${sets_format ?? null}, ${setsJson})
+         ${sets_format ?? null}, ${setsJson}, ${court ?? null})
       RETURNING *
     `;
     res.status(201).json(match);
@@ -38,7 +38,7 @@ router.post('/', async (req, res, next) => {
 // PUT /api/matches/:id
 router.put('/:id', async (req, res, next) => {
   try {
-    const { team1, team2, score1, score2, playedAt, duration_seconds, sets, sets_format } = req.body;
+    const { team1, team2, score1, score2, playedAt, duration_seconds, sets, sets_format, court } = req.body;
     const sql = getDb();
     const setsJson = sets?.length ? JSON.stringify(sets) : null;
     const [match] = await sql`
@@ -49,7 +49,8 @@ router.put('/:id', async (req, res, next) => {
         played_at = ${playedAt},
         duration_seconds = ${duration_seconds},
         sets_format = ${sets_format ?? null},
-        sets        = ${setsJson}
+        sets        = ${setsJson},
+        court       = ${court ?? null}
       WHERE id = ${req.params.id} RETURNING *
     `;
     if (!match) return res.status(404).json({ error: 'Partido no encontrado' });
