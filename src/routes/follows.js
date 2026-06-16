@@ -5,6 +5,25 @@ import { requireAuth, optionalAuth } from '../middleware/auth.js';
 
 const router = Router();
 
+// GET /api/follows/contacts — seguidores + seguidos del usuario autenticado (para autocompletado)
+router.get('/contacts', requireAuth, async (req, res, next) => {
+  try {
+    const sql = getDb();
+    const contacts = await sql`
+      SELECT DISTINCT u.id, u.name, u.username, u.avatar_url
+      FROM users u
+      WHERE u.id IN (
+        SELECT following_id FROM user_follows WHERE follower_id = ${req.user.id}
+        UNION
+        SELECT follower_id  FROM user_follows WHERE following_id = ${req.user.id}
+      )
+      ORDER BY u.name ASC
+      LIMIT 50
+    `;
+    res.json(contacts);
+  } catch (err) { next(err); }
+});
+
 // POST /api/follows/:username — seguir a un usuario
 router.post('/:username', requireAuth, async (req, res, next) => {
   try {

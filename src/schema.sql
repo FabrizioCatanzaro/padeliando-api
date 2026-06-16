@@ -1,3 +1,5 @@
+CREATE EXTENSION IF NOT EXISTS unaccent;
+
 -- Grupos de amigos
 CREATE TABLE IF NOT EXISTS groups (
   id          TEXT        PRIMARY KEY,
@@ -103,6 +105,9 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 -- Avatar de usuario (cualquier plan)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url       TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_public_id TEXT;
+
+-- Bio libre del usuario (hasta 200 chars)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
 
 -- Confirmación de email (registro con email/password)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;

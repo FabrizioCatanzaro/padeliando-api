@@ -12,7 +12,7 @@ const router = Router();
 router.get('/', optionalAuth, async (req, res, next) => {
   try {
     const sql     = getDb();
-    const q       = `%${(req.query.q ?? '').trim()}%`;
+    const rawQ    = (req.query.q ?? '').trim();
     const groupId = req.query.groupId;
     const mine    = req.query.mine === 'true' && !!req.user;
 
@@ -23,22 +23,24 @@ router.get('/', optionalAuth, async (req, res, next) => {
         FROM   players p
         JOIN   group_players gp ON gp.player_id = p.id
         WHERE  gp.group_id = ${groupId}
-          AND  p.name ILIKE ${q}
+          AND  unaccent(p.name) ILIKE '%' || unaccent(${rawQ}) || '%'
         ORDER  BY p.name ASC
         LIMIT  30`;
     } else if (mine) {
       players = await sql`
-        SELECT DISTINCT p.*
+        SELECT DISTINCT ON (lower(unaccent(p.name))) p.*
         FROM   players p
         JOIN   group_players gp ON gp.player_id = p.id
         JOIN   groups g         ON g.id = gp.group_id
         WHERE  g.user_id = ${req.user.id}
-          AND  p.name ILIKE ${q}
-        ORDER  BY p.name ASC
+          AND  unaccent(p.name) ILIKE '%' || unaccent(${rawQ}) || '%'
+        ORDER  BY lower(unaccent(p.name)) ASC
         LIMIT  30`;
     } else {
       players = await sql`
-        SELECT * FROM players WHERE name ILIKE ${q} ORDER BY name ASC LIMIT 30`;
+        SELECT * FROM players
+        WHERE unaccent(name) ILIKE '%' || unaccent(${rawQ}) || '%'
+        ORDER BY name ASC LIMIT 30`;
     }
 
     res.json(players);

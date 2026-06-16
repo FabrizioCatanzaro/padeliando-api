@@ -458,7 +458,7 @@ router.post('/reset-password', async (req, res, next) => {
 // ── PATCH /api/auth/me ────────────────────────────────────────────
 router.patch('/me', requireAuth, async (req, res, next) => {
   try {
-    const { name, username, current_password, new_password, social_links } = req.body;
+    const { name, username, current_password, new_password, social_links, bio } = req.body;
     const sql = getDb();
 
     const [user] = await sql`SELECT * FROM users WHERE id = ${req.user.id}`;
@@ -485,6 +485,11 @@ router.patch('/me', requireAuth, async (req, res, next) => {
       const [existing] = await sql`SELECT id FROM users WHERE username = ${trimmed} AND id != ${req.user.id}`;
       if (existing) return res.status(409).json({ error: 'Ese nombre de usuario ya está en uso' });
       updates.username = trimmed;
+    }
+
+    // Bio
+    if (bio !== undefined) {
+      updates.bio = bio.trim().slice(0, 200) || null;
     }
 
     // Redes sociales
@@ -515,7 +520,7 @@ router.patch('/me', requireAuth, async (req, res, next) => {
     const values = Object.values(updates);
     const setClauses = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
     const [updated] = await sql.query(
-      `UPDATE users SET ${setClauses} WHERE id = $${keys.length + 1} RETURNING id, name, username, avatar_url, social_links`,
+      `UPDATE users SET ${setClauses} WHERE id = $${keys.length + 1} RETURNING id, name, username, avatar_url, social_links, bio`,
       [...values, req.user.id]
     );
 

@@ -86,7 +86,8 @@ router.post('/', optionalAuth, async (req, res, next) => {
   try {
     const {
       groupId, name, mode = 'free', format = 'liga',
-      playerNames = [], pairs: pairsInput = []
+      playerNames = [], pairs: pairsInput = [],
+      number_of_courts = 1,
     } = req.body;
 
     if (!groupId)      return res.status(400).json({ error: 'groupId requerido' });
@@ -147,8 +148,8 @@ router.post('/', optionalAuth, async (req, res, next) => {
     }
 
     const [tournament] = await sql`
-        INSERT INTO tournaments (id, group_id, name, mode, format)
-        VALUES (${tId}, ${groupId}, ${name.trim()}, ${mode}, ${format})
+        INSERT INTO tournaments (id, group_id, name, mode, format, number_of_courts)
+        VALUES (${tId}, ${groupId}, ${name.trim()}, ${mode}, ${format}, ${number_of_courts ?? 1})
       RETURNING *`;
 
     for (const player of players) {
@@ -194,15 +195,16 @@ router.post('/', optionalAuth, async (req, res, next) => {
 router.patch('/:id', async (req, res, next) => {
   try {
     const { id }           = req.params;
-    const { name, status, mode } = req.body;
+    const { name, status, mode, number_of_courts } = req.body;
     if (name !== undefined && name.trim().length > 30) return res.status(400).json({ error: 'El nombre la jornada no puede superar los 30 caracteres' });
     if (name !== undefined && name.trim().length < 2) return res.status(400).json({ error: 'El nombre la jornada debe superar los 2 caracteres' });
     const sql = getDb();
     const [updated] = await sql`
       UPDATE tournaments
-      SET name   = COALESCE(${name   ?? null}, name),
-          status = COALESCE(${status ?? null}, status),
-          mode   = COALESCE(${mode   ?? null}, mode)
+      SET name             = COALESCE(${name   ?? null}, name),
+          status           = COALESCE(${status ?? null}, status),
+          mode             = COALESCE(${mode   ?? null}, mode),
+          number_of_courts = COALESCE(${number_of_courts ?? null}, number_of_courts)
       WHERE id = ${id} RETURNING *
     `;
     if (!updated) return res.status(404).json({ error: 'Torneo no encontrado' });
@@ -329,10 +331,10 @@ router.patch('/:id/bracket', async (req, res, next) => {
 
 // PATCH /api/tournaments/:id/bracket/:matchId
 // Registra el resultado de un partido del bracket y propaga el ganador al siguiente round.
-// Body: { score1, score2 }
+// Body: { score1, score2, duration_seconds, court }
 router.patch('/:id/bracket/:matchId', async (req, res, next) => {
   try {
-    const { score1, score2, duration_seconds } = req.body;
+    const { score1, score2, duration_seconds, court } = req.body;
     if (score1 == null || score2 == null) return res.status(400).json({ error: 'score1 y score2 requeridos' });
     if (typeof score1 !== 'number' || typeof score2 !== 'number') return res.status(400).json({ error: 'Los scores deben ser números' });
     if (score1 === score2) return res.status(400).json({ error: 'No puede haber empate en la fase eliminatoria' });
@@ -345,7 +347,7 @@ router.patch('/:id/bracket/:matchId', async (req, res, next) => {
     const bracket = tournament.bracket;
     const { matchId } = req.params;
 
-    const updated = applyBracketResult(bracket, matchId, score1, score2, duration_seconds ?? null);
+    const updated = applyBracketResult(bracket, matchId, score1, score2, duration_seconds ?? null, court ?? null);
     if (!updated) return res.status(404).json({ error: 'Partido de bracket no encontrado' });
 
     const [saved] = await sql`
@@ -555,7 +557,7 @@ function slotForSeed(seed, D, standings, octavos) {
  * y lo propaga a la siguiente ronda.
  * @returns {Object|null} bracket actualizado, o null si no encontró el partido
  */
-function applyBracketResult(bracket, matchId, score1, score2, duration_seconds = null) {
+function applyBracketResult(bracket, matchId, score1, score2, duration_seconds = null, court = null) {
   const b = JSON.parse(JSON.stringify(bracket)); // clonar
 
   const winner = score1 > score2 ? 'pair1' : 'pair2';
@@ -572,6 +574,7 @@ function applyBracketResult(bracket, matchId, score1, score2, duration_seconds =
     match.score1            = score1;
     match.score2            = score2;
     match.duration_seconds  = duration_seconds;
+    match.court             = court;
     match.winner_id         = match[`${winner}_id`];
     match.winner_name       = match[`${winner}_name`];
     found = true;
@@ -586,6 +589,7 @@ function applyBracketResult(bracket, matchId, score1, score2, duration_seconds =
     match.score1           = score1;
     match.score2           = score2;
     match.duration_seconds = duration_seconds;
+    match.court            = court;
     match.winner_id        = match[`${winner}_id`];
     match.winner_name      = match[`${winner}_name`];
     found = true;

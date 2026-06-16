@@ -68,6 +68,12 @@ router.get('/my-status/:tournamentId', requireAuth, async (req, res, next) => {
     const sql = getDb();
     const { tournamentId } = req.params;
 
+    const [tournament] = await sql`
+      SELECT g.user_id AS owner_id FROM tournaments t
+      JOIN groups g ON g.id = t.group_id
+      WHERE t.id = ${tournamentId}
+    `;
+
     const [alreadyPlayer] = await sql`
       SELECT p.id FROM players p
       INNER JOIN tournament_players tp ON tp.player_id = p.id AND tp.tournament_id = ${tournamentId}
@@ -79,7 +85,11 @@ router.get('/my-status/:tournamentId', requireAuth, async (req, res, next) => {
       WHERE tournament_id = ${tournamentId} AND user_id = ${req.user.id}
     `;
 
-    res.json({ is_player: !!alreadyPlayer, request: request ?? null });
+    res.json({
+      is_player: !!alreadyPlayer,
+      is_owner: tournament?.owner_id === req.user.id,
+      request: request ?? null
+    });
   } catch (err) { next(err); }
 });
 
