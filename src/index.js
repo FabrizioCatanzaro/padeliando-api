@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import morgan      from 'morgan';
 
 import groupsRouter         from './routes/groups.js';
+import clubsRouter          from './routes/clubs.js';
 import followsRouter        from './routes/follows.js';
 import notificationsRouter  from './routes/notifications.js';
 import playersRouter     from './routes/players.js';
@@ -44,6 +45,7 @@ app.use((req, res, next) => {
 
 app.use('/api/auth',        authRouter);
 app.use('/api/groups',      groupsRouter);
+app.use('/api/clubs',       clubsRouter);
 app.use('/api/players',     playersRouter);
 app.use('/api/tournaments', tournamentsRouter);
 app.use('/api/tournaments/:tournamentId/photos', photosRouter);

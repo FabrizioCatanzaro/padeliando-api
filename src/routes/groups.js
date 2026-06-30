@@ -395,15 +395,17 @@ router.get('/:groupId', async (req, res, next) => {
 
     const tournaments = await sql`
       SELECT t.*,
+             c.name AS club_name,
              COUNT(DISTINCT m.id)::int  AS match_count,
              COUNT(DISTINCT tp.player_id)::int AS player_count,
              COUNT(DISTINCT pr.id)::int AS pair_count
       FROM   tournaments t
+      LEFT JOIN clubs              c  ON c.id = t.club_id
       LEFT JOIN matches           m  ON m.tournament_id  = t.id
       LEFT JOIN tournament_players tp ON tp.tournament_id = t.id
       LEFT JOIN pairs             pr ON pr.tournament_id = t.id
       WHERE  t.group_id = ${groupId}
-      GROUP  BY t.id
+      GROUP  BY t.id, c.name
       ORDER  BY t.created_at DESC
     `;
 
