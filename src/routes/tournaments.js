@@ -13,12 +13,16 @@ router.get('/:id', async (req, res, next) => {
 
     const [tournament] = await sql`
       SELECT t.*,
+             c.name          AS club_name,
+             c.location_name AS club_location_name,
              (EXISTS (
                SELECT 1 FROM subscriptions s
                JOIN   groups g ON g.user_id = s.user_id
                WHERE  g.id = t.group_id AND s.plan = 'premium' AND s.status = 'active'
              )) AS owner_is_premium
-      FROM tournaments t WHERE t.id = ${id}
+      FROM tournaments t
+      LEFT JOIN clubs c ON c.id = t.club_id
+      WHERE t.id = ${id}
     `;
     if (!tournament) return res.status(404).json({ error: 'Torneo no encontrado' });
 
@@ -87,7 +91,7 @@ router.post('/', optionalAuth, async (req, res, next) => {
     const {
       groupId, name, mode = 'free', format = 'liga',
       playerNames = [], pairs: pairsInput = [],
-      number_of_courts = 1,
+      number_of_courts = 1, club_id = null, event_date = null,
     } = req.body;
 
     if (!groupId)      return res.status(400).json({ error: 'groupId requerido' });
@@ -104,6 +108,11 @@ router.post('/', optionalAuth, async (req, res, next) => {
 
     const sql  = getDb();
     const tId  = uid();
+
+    if (club_id) {
+      const [club] = await sql`SELECT id FROM clubs WHERE id = ${club_id}`;
+      if (!club) return res.status(404).json({ error: 'Club no encontrado' });
+    }
 
     const players = [];
     const nameMap = {};           // rawName.toLowerCase() → player (para matching de parejas)
@@ -142,14 +151,20 @@ router.post('/', optionalAuth, async (req, res, next) => {
       players.push(player);
       nameMap[trimmed.toLowerCase()] = player;
 
-      if (inviteUserId && !player.user_id && req.user) {
+      if (inviteUserId && req.user && inviteUserId === req.user.id) {
+        // El creador se suma a sí mismo → vincular automáticamente, sin invitación
+        if (!player.user_id) {
+          await sql`UPDATE players SET user_id = ${req.user.id} WHERE id = ${player.id}`;
+          player.user_id = req.user.id;
+        }
+      } else if (inviteUserId && !player.user_id && req.user) {
         pendingInvitations.push({ player, inviteUserId, inviteUsername });
       }
     }
 
     const [tournament] = await sql`
-        INSERT INTO tournaments (id, group_id, name, mode, format, number_of_courts)
-        VALUES (${tId}, ${groupId}, ${name.trim()}, ${mode}, ${format}, ${number_of_courts ?? 1})
+        INSERT INTO tournaments (id, group_id, name, mode, format, number_of_courts, club_id, event_date)
+        VALUES (${tId}, ${groupId}, ${name.trim()}, ${mode}, ${format}, ${number_of_courts ?? 1}, ${club_id ?? null}, ${event_date || null})
       RETURNING *`;
 
     for (const player of players) {
@@ -172,17 +187,22 @@ router.post('/', optionalAuth, async (req, res, next) => {
       pairs.push(pair);
     }
 
-    // Crear invitaciones para jugadores agregados por @username
+    // Crear invitaciones para jugadores agregados por @username (+ notificación)
     for (const { player, inviteUserId, inviteUsername } of pendingInvitations) {
       const [existing] = await sql`
         SELECT id FROM player_invitations WHERE player_id = ${player.id} AND status = 'pending'
       `;
       if (!existing) {
-        await sql`
+        const [invitation] = await sql`
           INSERT INTO player_invitations
             (id, player_id, group_id, invited_by, invited_identifier, invited_user_id)
           VALUES
             (${uid()}, ${player.id}, ${groupId}, ${req.user.id}, ${'@' + inviteUsername}, ${inviteUserId})
+          RETURNING id
+        `;
+        await sql`
+          INSERT INTO notifications (id, user_id, type, actor_id, entity_id)
+          VALUES (${uid()}, ${inviteUserId}, 'invitation', ${req.user.id}, ${invitation.id})
         `;
       }
     }
@@ -195,16 +215,24 @@ router.post('/', optionalAuth, async (req, res, next) => {
 router.patch('/:id', async (req, res, next) => {
   try {
     const { id }           = req.params;
-    const { name, status, mode, number_of_courts } = req.body;
+    const { name, status, mode, number_of_courts, club_id, event_date } = req.body;
     if (name !== undefined && name.trim().length > 30) return res.status(400).json({ error: 'El nombre la jornada no puede superar los 30 caracteres' });
     if (name !== undefined && name.trim().length < 2) return res.status(400).json({ error: 'El nombre la jornada debe superar los 2 caracteres' });
     const sql = getDb();
+
+    if (club_id) {
+      const [club] = await sql`SELECT id FROM clubs WHERE id = ${club_id}`;
+      if (!club) return res.status(404).json({ error: 'Club no encontrado' });
+    }
+
     const [updated] = await sql`
       UPDATE tournaments
       SET name             = COALESCE(${name   ?? null}, name),
           status           = COALESCE(${status ?? null}, status),
           mode             = COALESCE(${mode   ?? null}, mode),
-          number_of_courts = COALESCE(${number_of_courts ?? null}, number_of_courts)
+          number_of_courts = COALESCE(${number_of_courts ?? null}, number_of_courts),
+          club_id          = CASE WHEN ${club_id !== undefined}::boolean    THEN ${club_id || null}    ELSE club_id    END,
+          event_date       = CASE WHEN ${event_date !== undefined}::boolean THEN ${event_date || null}::date ELSE event_date END
       WHERE id = ${id} RETURNING *
     `;
     if (!updated) return res.status(404).json({ error: 'Torneo no encontrado' });
