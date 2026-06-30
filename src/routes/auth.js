@@ -41,6 +41,15 @@ const resendVerificationLimiter = rateLimit({
   message:         { error: 'Demasiados pedidos. Esperá 15 minutos.' },
 });
 
+// Chequeo de username — endpoints públicos llamados en vivo al tipear, tope generoso
+const usernameLimiter = rateLimit({
+  windowMs:        15 * 60 * 1000,
+  max:             60,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  message:         { error: 'Demasiados pedidos. Esperá unos minutos.' },
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function cookieOpts(maxAge) {
   return {
@@ -103,6 +112,14 @@ function validateUser(user) {
   return null;
 }
 
+function validateUsername(username) {
+  if (!username)                       return 'El nombre de usuario no puede estar vacío';
+  if (username.length < 3)             return 'El nombre de usuario debe tener al menos 3 caracteres';
+  if (username.length > 20)            return 'El nombre de usuario tiene un límite de 20 caracteres';
+  if (!/^[a-z0-9_]+$/.test(username))  return 'El nombre de usuario solo puede contener letras, números y guiones bajos';
+  return null;
+}
+
 // Bloquea si hay 5+ intentos fallidos del mismo email en los últimos 15 min
 async function checkLoginAttempts(sql, email) {
   const since = new Date(Date.now() - 15 * 60 * 1000);
@@ -161,7 +178,18 @@ router.post('/register', async (req, res, next) => {
     const userError = validateUser(name);
     if (userError) return res.status(400).json({ error: userError });
 
-    const username      = await generateUsername(sql, name);
+    // Username: usar el elegido por el usuario (si lo envió) o generar uno libre
+    let username;
+    if (req.body.username !== undefined && req.body.username !== '') {
+      const trimmed = String(req.body.username).trim().toLowerCase();
+      const unameError = validateUsername(trimmed);
+      if (unameError) return res.status(400).json({ error: unameError });
+      const [taken] = await sql`SELECT id FROM users WHERE username = ${trimmed}`;
+      if (taken) return res.status(409).json({ error: 'Ese nombre de usuario ya está en uso' });
+      username = trimmed;
+    } else {
+      username = await generateUsername(sql, name);
+    }
 
     const [user] = await sql`
       INSERT INTO users (id, email, password_hash, name, username)
@@ -333,6 +361,30 @@ router.get('/search', async (req, res, next) => {
       LIMIT 10
     `;
     res.json(users);
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/auth/suggest-username?name= ─────────────────────────────────────
+// Devuelve un nombre de usuario libre derivado del nombre dado.
+router.get('/suggest-username', usernameLimiter, async (req, res, next) => {
+  try {
+    const name = (req.query.name || '').toString();
+    const sql  = getDb();
+    const username = await generateUsername(sql, name);
+    res.json({ username });
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/auth/username-available?username= ───────────────────────────────
+// Valida formato y verifica que el nombre de usuario no esté en uso.
+router.get('/username-available', usernameLimiter, async (req, res, next) => {
+  try {
+    const username = (req.query.username || '').toString().trim().toLowerCase();
+    const error = validateUsername(username);
+    if (error) return res.json({ available: false, error });
+    const sql = getDb();
+    const [taken] = await sql`SELECT id FROM users WHERE username = ${username}`;
+    res.json({ available: !taken, error: taken ? 'Ese nombre de usuario ya está en uso' : null });
   } catch (err) { next(err); }
 });
 
