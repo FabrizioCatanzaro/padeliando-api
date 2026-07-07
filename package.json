@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.js",
     "start": "tsx src/index.js",
     "db:init": "tsx src/db-init.js",
+    "db:migrate": "tsx src/db-migrate.js",
     "email": "email dev --dir src/emails --port 3001"
   },
   "dependencies": {
