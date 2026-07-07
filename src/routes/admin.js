@@ -3,6 +3,7 @@ import { Resend }   from 'resend';
 import { getDb }    from '../db.js';
 import { uid }      from '../uid.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { deleteUserAccount } from '../lib/deleteUser.js';
 
 const resend    = new Resend(process.env.RESEND_API_KEY);
 const MAIL_FROM = process.env.MAIL_FROM || 'Padeleando <onboarding@resend.dev>';
@@ -217,6 +218,22 @@ router.post('/users/:id/revoke-premium', async (req, res, next) => {
     `;
 
     res.json({ ok: true, cancelled: result.length ?? result.count ?? 0 });
+  } catch (err) { next(err); }
+});
+
+// ── DELETE /api/admin/users/:id ──────────────────────────────────────────────
+// Borra por completo la cuenta de un usuario (mismo efecto que el auto-borrado):
+// sus grupos/torneos/fotos pasan a una cuenta anónima, el resto cae en cascada.
+router.delete('/users/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (id === req.user.id)
+      return res.status(400).json({ error: 'No podés borrar tu propia cuenta desde acá' });
+
+    const deleted = await deleteUserAccount(id);
+    if (!deleted) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 

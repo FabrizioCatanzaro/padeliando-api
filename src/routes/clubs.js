@@ -55,12 +55,22 @@ router.get('/requests', requireAuth, requireAdmin, async (req, res, next) => {
     const status = req.query.status ?? 'pending';
     const rows = await sql`
       SELECT
-        r.id, r.name, r.proposed_data, r.status, r.created_at, r.reviewed_at,
-        r.created_club_id,
+        r.id, r.name, r.proposed_data, r.previous_data, r.status, r.created_at, r.reviewed_at,
+        r.created_club_id, r.club_id, cl.name AS club_name,
+        CASE WHEN cl.id IS NOT NULL THEN jsonb_build_object(
+          'name',             cl.name,
+          'location_name',    cl.location_name,
+          'contact_phone',    cl.contact_phone,
+          'contact_whatsapp', cl.contact_whatsapp,
+          'courts',           cl.courts,
+          'social_links',     cl.social_links,
+          'schedule',         cl.schedule
+        ) END AS current_data,
         u.id AS requester_id, u.name AS requester_name, u.username AS requester_username,
         u.avatar_url AS requester_avatar_url
       FROM club_requests r
       JOIN users u ON u.id = r.requested_by
+      LEFT JOIN clubs cl ON cl.id = r.club_id
       WHERE ${status} = 'all' OR r.status = ${status}
       ORDER BY r.created_at DESC
     `;
@@ -78,12 +88,41 @@ router.post('/requests', requireAuth, async (req, res, next) => {
     if (name.length > 80)  return res.status(400).json({ error: 'El nombre del club no puede superar los 80 caracteres' });
 
     const sql = getDb();
+    const clubId = req.body?.club_id ?? null;
+    let previous = null;
+    if (clubId) {
+      const [existing] = await sql`
+        SELECT name, location_name, contact_phone, contact_whatsapp, courts, social_links, schedule
+        FROM clubs WHERE id = ${clubId}
+      `;
+      if (!existing) return res.status(404).json({ error: 'Club no encontrado' });
+      previous = existing;
+    }
     const proposed = clubFields(req.body);
     const [request] = await sql`
-      INSERT INTO club_requests (id, requested_by, name, proposed_data)
-      VALUES (${uid()}, ${req.user.id}, ${name}, ${JSON.stringify(proposed)}::jsonb)
-      RETURNING id, name, proposed_data, status, created_at
+      INSERT INTO club_requests (id, requested_by, name, proposed_data, club_id, previous_data)
+      VALUES (${uid()}, ${req.user.id}, ${name}, ${JSON.stringify(proposed)}::jsonb, ${clubId},
+              ${previous ? JSON.stringify(previous) : null}::jsonb)
+      RETURNING id, name, proposed_data, status, created_at, club_id
     `;
+
+    // Notificar a los admins (best-effort: no romper la solicitud si falla).
+    try {
+      const admins = await sql`SELECT id FROM users WHERE role = 'admin'`;
+      const body = clubId
+        ? `solicitó cambios para el club "${name}"`
+        : `solicitó agregar el club "${name}"`;
+      for (const admin of admins) {
+        if (admin.id === req.user.id) continue;
+        await sql`
+          INSERT INTO notifications (id, user_id, type, actor_id, entity_id, body)
+          VALUES (${uid()}, ${admin.id}, 'club_request', ${req.user.id}, ${request.id}, ${body})
+        `;
+      }
+    } catch (notifyErr) {
+      console.error('No se pudo notificar a los admins de la solicitud de club:', notifyErr.message);
+    }
+
     res.status(201).json(request);
   } catch (err) { next(err); }
 });
@@ -113,20 +152,62 @@ router.patch('/requests/:id', requireAuth, requireAdmin, async (req, res, next) 
       return res.json(updated);
     }
 
-    // approve → crear el club a partir de los datos propuestos
+    // approve → aplicar los datos propuestos
     const f = clubFields(request.proposed_data ?? {});
-    const [club] = await sql`
-      INSERT INTO clubs (
-        id, name, social_links, contact_phone, contact_whatsapp,
-        location_name, lat, lon, courts, schedule
-      ) VALUES (
-        ${uid()}, ${request.name},
-        ${JSON.stringify(f.social_links)}::jsonb, ${f.contact_phone}, ${f.contact_whatsapp},
-        ${f.location_name}, ${f.lat}, ${f.lon}, ${f.courts}, ${JSON.stringify(f.schedule)}::jsonb
-      )
-      RETURNING id, name, photo_url, social_links, contact_phone, contact_whatsapp,
-      location_name, lat, lon, courts, schedule, created_at
-    `;
+
+    // Override de ubicación: si el admin reubicó el pin al aprobar, pisa lat/lon
+    // (y la dirección) de la solicitud con las coordenadas verificadas.
+    const ovLat = Number(req.body?.lat);
+    const ovLon = Number(req.body?.lon);
+    if (Number.isFinite(ovLat) && Number.isFinite(ovLon)) {
+      f.lat = ovLat;
+      f.lon = ovLon;
+      if (typeof req.body?.location_name === 'string' && req.body.location_name.trim())
+        f.location_name = req.body.location_name.trim();
+    }
+    let club;
+    if (request.club_id) {
+      // Solicitud de edición: actualizar el club existente.
+      [club] = await sql`
+        UPDATE clubs SET
+          name             = ${request.name},
+          social_links     = ${JSON.stringify(f.social_links)}::jsonb,
+          contact_phone    = ${f.contact_phone},
+          contact_whatsapp = ${f.contact_whatsapp},
+          location_name    = ${f.location_name},
+          lat              = ${f.lat},
+          lon              = ${f.lon},
+          courts           = ${f.courts},
+          schedule         = ${JSON.stringify(f.schedule)}::jsonb
+        WHERE id = ${request.club_id}
+        RETURNING id, name, photo_url, social_links, contact_phone, contact_whatsapp,
+        location_name, lat, lon, courts, schedule, created_at
+      `;
+      if (!club) return res.status(404).json({ error: 'El club a editar ya no existe' });
+    } else {
+      // Solicitud de alta: crear un club nuevo.
+      [club] = await sql`
+        INSERT INTO clubs (
+          id, name, social_links, contact_phone, contact_whatsapp,
+          location_name, lat, lon, courts, schedule
+        ) VALUES (
+          ${uid()}, ${request.name},
+          ${JSON.stringify(f.social_links)}::jsonb, ${f.contact_phone}, ${f.contact_whatsapp},
+          ${f.location_name}, ${f.lat}, ${f.lon}, ${f.courts}, ${JSON.stringify(f.schedule)}::jsonb
+        )
+        RETURNING id, name, photo_url, social_links, contact_phone, contact_whatsapp,
+        location_name, lat, lon, courts, schedule, created_at
+      `;
+      // Backfill: categorías y torneos que esperaban este club quedan vinculados.
+      await sql`
+        UPDATE groups SET club_id = ${club.id}, pending_club_request_id = NULL
+        WHERE pending_club_request_id = ${request.id}
+      `;
+      await sql`
+        UPDATE tournaments SET club_id = ${club.id}, pending_club_request_id = NULL
+        WHERE pending_club_request_id = ${request.id}
+      `;
+    }
     await sql`
       UPDATE club_requests
       SET status = 'approved', reviewed_by = ${req.user.id}, reviewed_at = NOW(),
@@ -134,6 +215,40 @@ router.patch('/requests/:id', requireAuth, requireAdmin, async (req, res, next) 
       WHERE id = ${request.id}
     `;
     res.json({ status: 'approved', club });
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/clubs/nearby?lat=&lon=&radius= ──────────────────────────────────
+// Clubes con ubicación cercana (Haversine, radio en km, máx 100).
+router.get('/nearby', async (req, res, next) => {
+  try {
+    const lat    = parseFloat(req.query.lat);
+    const lon    = parseFloat(req.query.lon);
+    const radius = Math.min(parseFloat(req.query.radius) || 20, 100);
+    if (isNaN(lat) || isNaN(lon)) return res.status(400).json({ error: 'lat y lon requeridos' });
+
+    const sql = getDb();
+    const clubs = await sql`
+      SELECT c.id, c.name, c.photo_url, c.location_name, c.lat, c.lon, c.courts,
+             ROUND(
+               (6371 * acos(
+                 LEAST(1, cos(radians(${lat})) * cos(radians(c.lat)) *
+                 cos(radians(c.lon) - radians(${lon})) +
+                 sin(radians(${lat})) * sin(radians(c.lat)))
+               ))::numeric, 1
+             ) AS distance_km
+      FROM clubs c
+      WHERE c.lat IS NOT NULL
+        AND c.lon IS NOT NULL
+        AND (6371 * acos(
+          LEAST(1, cos(radians(${lat})) * cos(radians(c.lat)) *
+          cos(radians(c.lon) - radians(${lon})) +
+          sin(radians(${lat})) * sin(radians(c.lat)))
+        )) <= ${radius}
+      ORDER BY distance_km ASC
+      LIMIT 20
+    `;
+    res.json(clubs);
   } catch (err) { next(err); }
 });
 

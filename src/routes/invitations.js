@@ -50,13 +50,34 @@ router.post('/', requireAuth, async (req, res, next) => {
       return res.status(409).json({ error: 'Ya hay una invitación pendiente para este jugador' });
     }
 
+    // Auto-aceptar: si el usuario ya aceptó antes una invitación en esta misma categoría,
+    // significa que ya jugó con este organizador acá → no hace falta que confirme de nuevo.
+    let autoAccept = false;
+    if (invitedUser?.id) {
+      const [prior] = await sql`
+        SELECT 1 FROM player_invitations
+        WHERE group_id = ${groupId} AND invited_user_id = ${invitedUser.id} AND status = 'accepted'
+        LIMIT 1
+      `;
+      autoAccept = !!prior;
+    }
+
     const [invitation] = await sql`
       INSERT INTO player_invitations
-        (id, player_id, group_id, invited_by, invited_identifier, invited_user_id)
+        (id, player_id, group_id, invited_by, invited_identifier, invited_user_id, status)
       VALUES
-        (${uid()}, ${playerId}, ${groupId}, ${req.user.id}, ${raw}, ${invitedUser?.id ?? null})
+        (${uid()}, ${playerId}, ${groupId}, ${req.user.id}, ${raw}, ${invitedUser?.id ?? null},
+         ${autoAccept ? 'accepted' : 'pending'})
       RETURNING *
     `;
+
+    // Si se auto-acepta, vincular el slot de jugador a la cuenta al instante
+    if (autoAccept) {
+      await sql`
+        UPDATE players SET user_id = ${invitedUser.id}, name = ${invitedUser.name}
+        WHERE id = ${invitation.player_id}
+      `;
+    }
 
     // Notificar al usuario invitado si fue encontrado
     if (invitedUser?.id) {
@@ -66,7 +87,7 @@ router.post('/', requireAuth, async (req, res, next) => {
       `;
     }
 
-    res.status(201).json({ invitation, found: !!invitedUser });
+    res.status(201).json({ invitation, found: !!invitedUser, autoAccepted: autoAccept });
   } catch (err) { next(err); }
 });
 
