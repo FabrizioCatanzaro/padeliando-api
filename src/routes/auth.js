@@ -8,11 +8,13 @@ import { Resend } from 'resend';
 import { createElement } from 'react';
 import VerifyEmailTemplate  from '../emails/VerifyEmail.jsx';
 import ResetPasswordTemplate from '../emails/ResetPassword.jsx';
+import WelcomeTemplate       from '../emails/Welcome.jsx';
 import { getDb }         from '../db.js';
 import { uid }           from '../uid.js';
 import { requireAuth } from '../middleware/auth.js';
 import { uploadAvatar } from '../middleware/upload.js';
 import { uploadBuffer, deleteByPublicId } from '../lib/cloudinary.js';
+import { deleteUserAccount } from '../lib/deleteUser.js';
 import { getActiveSubscription } from './subscriptions.js';
 
 const router       = Router();
@@ -160,6 +162,20 @@ async function sendVerificationEmail(sql, user) {
   });
 }
 
+// Mail de bienvenida tras verificar. No-bloqueante: nunca debe hacer fallar la verificación.
+async function sendWelcomeEmail(user) {
+  try {
+    await resend.emails.send({
+      from:    MAIL_FROM,
+      to:      user.email,
+      subject: '¡Bienvenido a Padeleando! 🎾',
+      react:   createElement(WelcomeTemplate, { name: user.name, appUrl: process.env.FRONTEND_URL }),
+    });
+  } catch (err) {
+    console.error('No se pudo enviar el mail de bienvenida:', err);
+  }
+}
+
 // ── POST /api/auth/register ───────────────────────────────────────────────────
 router.post('/register', async (req, res, next) => {
   try {
@@ -257,6 +273,7 @@ router.post('/google', async (req, res, next) => {
 
     const sql = getDb();
     let [user] = await sql`SELECT * FROM users WHERE google_id = ${google_id}`;
+    let isNewUser = false;
 
     if (!user) {
       const [byEmail] = await sql`SELECT * FROM users WHERE email = LOWER(${email})`;
@@ -275,12 +292,15 @@ router.post('/google', async (req, res, next) => {
           VALUES (${uid()}, LOWER(${email}), ${google_id}, ${name}, ${username}, NOW())
           RETURNING id, email, name, username, avatar_url, created_at
         `;
+        isNewUser = true;
       }
     }
 
     const { password_hash, ...safeUser } = user;
     const refreshToken = setAuthCookies(res, safeUser);
     await saveRefreshToken(sql, user.id, refreshToken);
+
+    if (isNewUser) await sendWelcomeEmail(user);
 
     const subscription = await getActiveSubscription(sql, user.id);
     res.json({ user: { ...safeUser, subscription } });
@@ -415,6 +435,8 @@ router.post('/verify-email', async (req, res, next) => {
 
     const refreshToken = setAuthCookies(res, user);
     await saveRefreshToken(sql, user.id, refreshToken);
+
+    await sendWelcomeEmail(user);
 
     res.json({ user });
   } catch (err) { next(err); }
@@ -626,6 +648,30 @@ router.delete('/me/avatar', requireAuth, async (req, res, next) => {
       SET    avatar_url = NULL, avatar_public_id = NULL
       WHERE  id = ${req.user.id}
     `;
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ── DELETE /api/auth/me ──────────────────────────────────────────────────────
+// El usuario borra su propia cuenta. Si tiene contraseña, la exige como confirmación.
+// (Los usuarios de solo-Google no tienen password_hash y confirman desde el modal.)
+router.delete('/me', requireAuth, async (req, res, next) => {
+  try {
+    const sql = getDb();
+    const [user] = await sql`SELECT id, password_hash FROM users WHERE id = ${req.user.id}`;
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    if (user.password_hash) {
+      const { password } = req.body ?? {};
+      if (!password) return res.status(400).json({ error: 'Ingresá tu contraseña para confirmar' });
+      const valid = await bcrypt.compare(password, user.password_hash);
+      if (!valid)  return res.status(400).json({ error: 'La contraseña es incorrecta' });
+    }
+
+    await deleteUserAccount(user.id);
+
+    res.clearCookie('access_token',  cookieOpts(0));
+    res.clearCookie('refresh_token', cookieOpts(0));
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
