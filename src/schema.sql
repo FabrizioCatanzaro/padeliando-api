@@ -168,15 +168,30 @@ CREATE TABLE IF NOT EXISTS club_requests (
   created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Solicitud de edición: apunta a un club existente (NULL = alta de club nuevo).
+ALTER TABLE club_requests ADD COLUMN IF NOT EXISTS club_id TEXT REFERENCES clubs(id) ON DELETE CASCADE;
+-- Snapshot de los datos del club al momento de crear la solicitud (para el diff "antes → después").
+ALTER TABLE club_requests ADD COLUMN IF NOT EXISTS previous_data JSONB;
+
 -- Cada torneo se juega (opcionalmente) en un club, con fecha programada del evento.
 ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS club_id    TEXT REFERENCES clubs(id) ON DELETE SET NULL;
 ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS event_date DATE;
+
+-- Club por defecto de la categoría (se hereda a los torneos que se crean dentro).
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS club_id TEXT REFERENCES clubs(id) ON DELETE SET NULL;
+-- Referencia a una solicitud de club pendiente: al aprobarse, se backfillea club_id.
+ALTER TABLE groups      ADD COLUMN IF NOT EXISTS pending_club_request_id TEXT REFERENCES club_requests(id) ON DELETE SET NULL;
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS pending_club_request_id TEXT REFERENCES club_requests(id) ON DELETE SET NULL;
 
 -- Índices
 CREATE INDEX IF NOT EXISTS idx_tp_tournament         ON tournament_players(tournament_id);
 CREATE INDEX IF NOT EXISTS idx_clubs_name            ON clubs(name);
 CREATE INDEX IF NOT EXISTS idx_tournaments_club      ON tournaments(club_id);
 CREATE INDEX IF NOT EXISTS idx_club_requests_status  ON club_requests(status);
+CREATE INDEX IF NOT EXISTS idx_club_requests_club    ON club_requests(club_id);
+CREATE INDEX IF NOT EXISTS idx_groups_club           ON groups(club_id);
+CREATE INDEX IF NOT EXISTS idx_groups_pending_club       ON groups(pending_club_request_id);
+CREATE INDEX IF NOT EXISTS idx_tournaments_pending_club  ON tournaments(pending_club_request_id);
 CREATE INDEX IF NOT EXISTS idx_tournaments_group     ON tournaments(group_id);
 CREATE INDEX IF NOT EXISTS idx_matches_tournament    ON matches(tournament_id);
 CREATE INDEX IF NOT EXISTS idx_pairs_tournament      ON pairs(tournament_id);

@@ -341,6 +341,31 @@ router.get('/nearby', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/groups/featured?limit= — categorías públicas con actividad reciente (home de visitantes)
+router.get('/featured', async (req, res, next) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 8, 20);
+    const sql = getDb();
+    const groups = await sql`
+      SELECT g.id, g.name, g.description, g.emojis, g.location_name, g.is_public,
+             u.username AS owner_username, u.name AS owner_name, u.avatar_url AS owner_avatar_url,
+             (SELECT COUNT(DISTINCT tp.player_id)::int
+              FROM tournament_players tp
+              JOIN tournaments t ON t.id = tp.tournament_id
+              WHERE t.group_id = g.id) AS player_count,
+             (SELECT COUNT(*)::int FROM tournaments t WHERE t.group_id = g.id) AS tournament_count,
+             (SELECT MAX(t.created_at) FROM tournaments t WHERE t.group_id = g.id) AS last_activity
+      FROM groups g
+      JOIN users u ON u.id = g.user_id
+      WHERE g.is_public = true
+        AND EXISTS (SELECT 1 FROM tournaments t WHERE t.group_id = g.id)
+      ORDER BY last_activity DESC NULLS LAST
+      LIMIT ${limit}
+    `;
+    res.json(groups);
+  } catch (err) { next(err); }
+});
+
 // GET /api/groups/:groupId/history — estadísticas históricas de todas las jornadas
 router.get('/:groupId/history', async (req, res, next) => {
   try {
@@ -383,12 +408,17 @@ router.get('/:groupId', async (req, res, next) => {
 
     const [group] = await sql`
       SELECT g.*, u.username AS owner_username, u.name AS owner_name, u.avatar_url AS owner_avatar_url,
+             c.name AS club_name, c.location_name AS club_location_name, c.photo_url AS club_photo_url,
+             c.courts AS club_courts,
+             cr.name AS pending_club_name,
              (EXISTS (
                SELECT 1 FROM subscriptions s
                WHERE s.user_id = g.user_id AND s.plan = 'premium' AND s.status = 'active'
              )) AS owner_is_premium
       FROM groups g
       JOIN users u ON u.id = g.user_id
+      LEFT JOIN clubs c ON c.id = g.club_id
+      LEFT JOIN club_requests cr ON cr.id = g.pending_club_request_id
       WHERE g.id = ${groupId}
     `;
     if (!group) return res.status(404).json({ error: 'Grupo no encontrado' });
@@ -550,14 +580,23 @@ router.get('/:groupId', async (req, res, next) => {
 // POST /api/groups — requiere auth
 router.post('/', requireAuth, async (req, res, next) => {
   try {
-    const { name, description, is_public = true, emojis = [], location_name, place_id, lat, lon } = req.body;
+    const { name, description, is_public = true, emojis = [], location_name, place_id, lat, lon,
+            club_id = null, pending_club_request_id = null } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'name requerido' });
     if (name.trim().length > 30) return res.status(400).json({ error: 'El nombre del torneo no puede superar los 30 caracteres' });
     if (name.trim().length < 2) return res.status(400).json({ error: 'El nombre del torneo debe tener mas de 2 caracteres' });
+    if (description && description.trim().length > 50) return res.status(400).json({ error: 'La descripción no puede superar los 50 caracteres' });
     const sql = getDb();
+    if (club_id) {
+      const [club] = await sql`SELECT id FROM clubs WHERE id = ${club_id}`;
+      if (!club) return res.status(404).json({ error: 'Club no encontrado' });
+    }
     const [group] = await sql`
-      INSERT INTO groups (id, name, description, user_id, is_public, emojis, location_name, place_id, lat, lon)
-      VALUES (${uid()}, ${name.trim()}, ${description ?? null}, ${req.user.id}, ${is_public}, ${emojis}, ${location_name ?? null}, ${place_id ?? null}, ${lat ?? null}, ${lon ?? null})
+      INSERT INTO groups (id, name, description, user_id, is_public, emojis, location_name, place_id, lat, lon,
+                          club_id, pending_club_request_id)
+      VALUES (${uid()}, ${name.trim()}, ${description ?? null}, ${req.user.id}, ${is_public}, ${emojis},
+              ${location_name ?? null}, ${place_id ?? null}, ${lat ?? null}, ${lon ?? null},
+              ${club_id ?? null}, ${pending_club_request_id ?? null})
       RETURNING *
     `;
     res.status(201).json(group);
@@ -567,13 +606,18 @@ router.post('/', requireAuth, async (req, res, next) => {
 // PUT /api/groups/:groupId — solo el dueño
 router.put('/:groupId', requireAuth, async (req, res, next) => {
   try {
-    const { name, description, is_public, emojis, location_name, place_id, lat, lon } = req.body;
+    const { name, description, is_public, emojis, location_name, place_id, lat, lon, club_id, pending_club_request_id } = req.body;
     if (name !== undefined && name.trim().length > 30) return res.status(400).json({ error: 'El nombre del torneo no puede superar los 30 caracteres' });
     if (name !== undefined && name.trim().length < 2) return res.status(400).json({ error: 'El nombre del torneo debe tener mas de 2 caracteres' });
+    if (description !== undefined && description !== null && description.trim().length > 50) return res.status(400).json({ error: 'La descripción no puede superar los 50 caracteres' });
     const sql = getDb();
     const [group] = await sql`SELECT user_id FROM groups WHERE id = ${req.params.groupId}`;
     if (!group) return res.status(404).json({ error: 'Grupo no encontrado' });
     if (group.user_id !== req.user.id) return res.status(403).json({ error: 'Sin permiso' });
+    if (club_id) {
+      const [club] = await sql`SELECT id FROM clubs WHERE id = ${club_id}`;
+      if (!club) return res.status(404).json({ error: 'Club no encontrado' });
+    }
 
     const [updated] = await sql`
       UPDATE groups
@@ -584,7 +628,9 @@ router.put('/:groupId', requireAuth, async (req, res, next) => {
           location_name = COALESCE(${location_name ?? null}, location_name),
           place_id = COALESCE(${place_id ?? null}, place_id),
           lat = COALESCE(${lat ?? null}, lat),
-          lon = COALESCE(${lon ?? null}, lon)
+          lon = COALESCE(${lon ?? null}, lon),
+          club_id = CASE WHEN ${club_id !== undefined}::boolean THEN ${club_id ?? null} ELSE club_id END,
+          pending_club_request_id = CASE WHEN ${pending_club_request_id !== undefined}::boolean THEN ${pending_club_request_id ?? null} ELSE pending_club_request_id END
       WHERE id = ${req.params.groupId} RETURNING *
     `;
     res.json(updated);

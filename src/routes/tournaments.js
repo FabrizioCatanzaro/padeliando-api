@@ -92,6 +92,7 @@ router.post('/', optionalAuth, async (req, res, next) => {
       groupId, name, mode = 'free', format = 'liga',
       playerNames = [], pairs: pairsInput = [],
       number_of_courts = 1, club_id = null, event_date = null,
+      pending_club_request_id = null,
     } = req.body;
 
     if (!groupId)      return res.status(400).json({ error: 'groupId requerido' });
@@ -163,8 +164,8 @@ router.post('/', optionalAuth, async (req, res, next) => {
     }
 
     const [tournament] = await sql`
-        INSERT INTO tournaments (id, group_id, name, mode, format, number_of_courts, club_id, event_date)
-        VALUES (${tId}, ${groupId}, ${name.trim()}, ${mode}, ${format}, ${number_of_courts ?? 1}, ${club_id ?? null}, ${event_date || null})
+        INSERT INTO tournaments (id, group_id, name, mode, format, number_of_courts, club_id, event_date, pending_club_request_id)
+        VALUES (${tId}, ${groupId}, ${name.trim()}, ${mode}, ${format}, ${number_of_courts ?? 1}, ${club_id ?? null}, ${event_date || null}, ${pending_club_request_id ?? null})
       RETURNING *`;
 
     for (const player of players) {
@@ -187,24 +188,39 @@ router.post('/', optionalAuth, async (req, res, next) => {
       pairs.push(pair);
     }
 
-    // Crear invitaciones para jugadores agregados por @username (+ notificación)
+    // Crear invitaciones para jugadores agregados por @username (+ notificación).
+    // Auto-aceptar si el usuario ya aceptó antes una invitación en esta misma categoría.
     for (const { player, inviteUserId, inviteUsername } of pendingInvitations) {
       const [existing] = await sql`
         SELECT id FROM player_invitations WHERE player_id = ${player.id} AND status = 'pending'
       `;
-      if (!existing) {
-        const [invitation] = await sql`
-          INSERT INTO player_invitations
-            (id, player_id, group_id, invited_by, invited_identifier, invited_user_id)
-          VALUES
-            (${uid()}, ${player.id}, ${groupId}, ${req.user.id}, ${'@' + inviteUsername}, ${inviteUserId})
-          RETURNING id
-        `;
-        await sql`
-          INSERT INTO notifications (id, user_id, type, actor_id, entity_id)
-          VALUES (${uid()}, ${inviteUserId}, 'invitation', ${req.user.id}, ${invitation.id})
-        `;
+      if (existing) continue;
+
+      const [prior] = await sql`
+        SELECT 1 FROM player_invitations
+        WHERE group_id = ${groupId} AND invited_user_id = ${inviteUserId} AND status = 'accepted'
+        LIMIT 1
+      `;
+      const autoAccept = !!prior;
+
+      const [invitation] = await sql`
+        INSERT INTO player_invitations
+          (id, player_id, group_id, invited_by, invited_identifier, invited_user_id, status)
+        VALUES
+          (${uid()}, ${player.id}, ${groupId}, ${req.user.id}, ${'@' + inviteUsername}, ${inviteUserId},
+           ${autoAccept ? 'accepted' : 'pending'})
+        RETURNING id
+      `;
+
+      // Si se auto-acepta, vincular el slot de jugador a la cuenta al instante
+      if (autoAccept) {
+        await sql`UPDATE players SET user_id = ${inviteUserId} WHERE id = ${player.id}`;
       }
+
+      await sql`
+        INSERT INTO notifications (id, user_id, type, actor_id, entity_id)
+        VALUES (${uid()}, ${inviteUserId}, 'invitation', ${req.user.id}, ${invitation.id})
+      `;
     }
 
     res.status(201).json({ ...tournament, players, pairs, matches: [] });
@@ -254,6 +270,9 @@ router.delete('/:id/matches', async (req, res, next) => {
   try {
     const sql = getDb();
     await sql`DELETE FROM matches WHERE tournament_id = ${req.params.id}`;
+    // Reiniciar también deja el torneo en estado pre-juego: limpiar el cuadro
+    // de eliminatorias (americano) y el indicador de partido en vivo.
+    await sql`UPDATE tournaments SET bracket = NULL, live_match = NULL WHERE id = ${req.params.id}`;
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

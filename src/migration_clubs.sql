@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS club_requests (
 ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS club_id    TEXT REFERENCES clubs(id) ON DELETE SET NULL;
 ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS event_date DATE;
 
+-- Solicitud de edición: apunta a un club existente (NULL = alta de club nuevo).
+ALTER TABLE club_requests ADD COLUMN IF NOT EXISTS club_id TEXT REFERENCES clubs(id) ON DELETE CASCADE;
+ALTER TABLE club_requests ADD COLUMN IF NOT EXISTS previous_data JSONB;
+
 CREATE INDEX IF NOT EXISTS idx_clubs_name           ON clubs(name);
 CREATE INDEX IF NOT EXISTS idx_tournaments_club     ON tournaments(club_id);
 CREATE INDEX IF NOT EXISTS idx_club_requests_status ON club_requests(status);
+CREATE INDEX IF NOT EXISTS idx_club_requests_club   ON club_requests(club_id);
