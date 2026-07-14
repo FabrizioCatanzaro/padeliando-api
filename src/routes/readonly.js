@@ -10,10 +10,13 @@ router.get('/:tournamentId', async (req, res, next) => {
     const { tournamentId } = req.params;
  
     const [tournament] = await sql`
-      SELECT t.*, u.username AS owner_username
+      SELECT t.*, u.username AS owner_username,
+             c.name          AS club_name,
+             c.location_name AS club_location_name
       FROM   tournaments t
       JOIN   groups g ON g.id = t.group_id
       JOIN   users  u ON u.id = g.user_id
+      LEFT   JOIN clubs c ON c.id = t.club_id
       WHERE  t.id = ${tournamentId}
     `;
     if (!tournament) return res.status(404).json({ error: 'Torneo no encontrado' });
@@ -68,6 +71,10 @@ router.get('/:tournamentId', async (req, res, next) => {
       group_id:       tournament.group_id,
       owner_username: tournament.owner_username,
       created_at:     tournament.created_at,
+      event_date:          tournament.event_date ?? null,
+      club_id:             tournament.club_id ?? null,
+      club_name:           tournament.club_name ?? null,
+      club_location_name:  tournament.club_location_name ?? null,
       bracket:        tournament.bracket ?? null,
       players,
       pairs,

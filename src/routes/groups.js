@@ -52,6 +52,29 @@ router.get('/participating', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/groups/collaborating — categorías donde el usuario es co-organizador
+router.get('/collaborating', requireAuth, async (req, res, next) => {
+  try {
+    const sql = getDb();
+    const groups = await sql`
+      SELECT g.*,
+        u.username   AS owner_username,
+        u.name       AS owner_name,
+        u.avatar_url AS owner_avatar_url,
+        (SELECT COUNT(DISTINCT tp.player_id)::int
+         FROM tournament_players tp
+         JOIN tournaments t ON t.id = tp.tournament_id
+         WHERE t.group_id = g.id) AS player_count,
+        (SELECT COUNT(*)::int FROM tournaments t WHERE t.group_id = g.id) AS tournament_count
+      FROM groups g
+      JOIN users u ON u.id = g.user_id
+      JOIN group_collaborators gc ON gc.group_id = g.id AND gc.user_id = ${req.user.id}
+      ORDER BY g.created_at DESC
+    `;
+    res.json(groups);
+  } catch (err) { next(err); }
+});
+
 // GET /api/groups/user/:username — perfil público de otro usuario
 router.get('/user/:username', optionalAuth, async (req, res, next) => {
   try {
@@ -401,7 +424,7 @@ router.get('/:groupId/history', async (req, res, next) => {
 });
 
 // GET /api/groups/:groupId
-router.get('/:groupId', async (req, res, next) => {
+router.get('/:groupId', optionalAuth, async (req, res, next) => {
   try {
     const { groupId } = req.params;
     const sql = getDb();
@@ -573,7 +596,38 @@ router.get('/:groupId', async (req, res, next) => {
       SELECT * FROM ranked WHERE rnk = 1 ORDER BY created_at DESC
     `;
 
-    res.json({ ...group, tournaments, stats: { playerStats, tournamentWinners } });
+    // ── Permisos + co-organizadores ─────────────────────────────────────────
+    const viewerId = req.user?.id ?? null;
+    const collaborators = await sql`
+      SELECT u.id AS user_id, u.name, u.username, u.avatar_url
+      FROM   group_collaborators gc
+      JOIN   users u ON u.id = gc.user_id
+      WHERE  gc.group_id = ${groupId}
+      ORDER  BY gc.added_at ASC
+    `;
+    const is_owner   = !!viewerId && group.user_id === viewerId;
+    const can_manage = is_owner || (!!viewerId && collaborators.some((c) => c.user_id === viewerId));
+
+    // Transferencia de propiedad pendiente (solo la ve el dueño)
+    let pending_transfer = null;
+    if (is_owner) {
+      const [pt] = await sql`
+        SELECT ot.id, ot.token, ot.created_at,
+               u.name AS to_name, u.username AS to_username
+        FROM   ownership_transfers ot
+        LEFT   JOIN users u ON u.id = ot.to_user_id
+        WHERE  ot.group_id = ${groupId} AND ot.status = 'pending'
+        ORDER  BY ot.created_at DESC
+        LIMIT  1
+      `;
+      pending_transfer = pt ?? null;
+    }
+
+    res.json({
+      ...group, tournaments,
+      stats: { playerStats, tournamentWinners },
+      collaborators, is_owner, can_manage, pending_transfer,
+    });
   } catch (err) { next(err); }
 });
 

@@ -2,9 +2,10 @@ import { Router } from 'express';
 import { getDb } from '../db.js';
 import { uid }   from '../uid.js';
 import { requireAuth }              from '../middleware/auth.js';
-import { requirePremium }           from '../middleware/requirePremium.js';
 import { uploadTournamentPhoto }    from '../middleware/upload.js';
 import { uploadBuffer, deleteByPublicId } from '../lib/cloudinary.js';
+import { canManageGroup }           from '../lib/access.js';
+import { getActiveSubscription }    from './subscriptions.js';
 
 const router = Router({ mergeParams: true });
 
@@ -12,7 +13,7 @@ const MAX_PHOTOS_PER_TOURNAMENT = 12;
 
 async function getTournamentOwnership(sql, tournamentId) {
   const [row] = await sql`
-    SELECT g.user_id FROM tournaments t
+    SELECT g.id AS group_id, g.user_id FROM tournaments t
     JOIN   groups g ON g.id = t.group_id
     WHERE  t.id = ${tournamentId}
   `;
@@ -33,8 +34,8 @@ router.get('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/tournaments/:tournamentId/photos — solo dueño del grupo + premium
-router.post('/', requireAuth, requirePremium, uploadTournamentPhoto, async (req, res, next) => {
+// POST /api/tournaments/:tournamentId/photos — dueño o co-organizador; premium del DUEÑO
+router.post('/', requireAuth, uploadTournamentPhoto, async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No se envió imagen' });
     const { tournamentId } = req.params;
@@ -42,8 +43,13 @@ router.post('/', requireAuth, requirePremium, uploadTournamentPhoto, async (req,
 
     const owner = await getTournamentOwnership(sql, tournamentId);
     if (!owner) return res.status(404).json({ error: 'Torneo no encontrado' });
-    if (owner.user_id !== req.user.id)
+    if (!(await canManageGroup(sql, req.user.id, owner.group_id)))
       return res.status(403).json({ error: 'Sin permiso' });
+
+    // La compuerta premium se evalúa contra el DUEÑO de la categoría, no contra quien sube.
+    const ownerSub = await getActiveSubscription(sql, owner.user_id);
+    if (ownerSub.plan !== 'premium')
+      return res.status(403).json({ error: 'Las fotos son una función Premium del dueño de la categoría' });
 
     const [{ count }] = await sql`
       SELECT COUNT(*)::int AS count
@@ -79,14 +85,13 @@ router.patch('/:photoId', requireAuth, async (req, res, next) => {
     const sql = getDb();
 
     const [photo] = await sql`
-      SELECT p.id, g.user_id AS group_owner_id
+      SELECT p.id, t.group_id
       FROM   tournament_photos p
       JOIN   tournaments t ON t.id = p.tournament_id
-      JOIN   groups      g ON g.id = t.group_id
       WHERE  p.id = ${photoId} AND p.tournament_id = ${tournamentId}
     `;
     if (!photo) return res.status(404).json({ error: 'Foto no encontrada' });
-    if (photo.group_owner_id !== req.user.id)
+    if (!(await canManageGroup(sql, req.user.id, photo.group_id)))
       return res.status(403).json({ error: 'Sin permiso' });
 
     const raw = typeof req.body?.caption === 'string' ? req.body.caption.trim() : '';
@@ -109,14 +114,13 @@ router.patch('/:photoId/cover', requireAuth, async (req, res, next) => {
     const sql = getDb();
 
     const [photo] = await sql`
-      SELECT p.id, g.user_id AS group_owner_id
+      SELECT p.id, t.group_id
       FROM   tournament_photos p
       JOIN   tournaments t ON t.id = p.tournament_id
-      JOIN   groups      g ON g.id = t.group_id
       WHERE  p.id = ${photoId} AND p.tournament_id = ${tournamentId}
     `;
     if (!photo) return res.status(404).json({ error: 'Foto no encontrada' });
-    if (photo.group_owner_id !== req.user.id)
+    if (!(await canManageGroup(sql, req.user.id, photo.group_id)))
       return res.status(403).json({ error: 'Sin permiso' });
 
     await sql`
@@ -136,14 +140,13 @@ router.delete('/:photoId', requireAuth, async (req, res, next) => {
     const sql = getDb();
 
     const [photo] = await sql`
-      SELECT p.id, p.public_id, g.user_id AS group_owner_id
+      SELECT p.id, p.public_id, t.group_id
       FROM   tournament_photos p
       JOIN   tournaments t ON t.id = p.tournament_id
-      JOIN   groups      g ON g.id = t.group_id
       WHERE  p.id = ${photoId} AND p.tournament_id = ${tournamentId}
     `;
     if (!photo) return res.status(404).json({ error: 'Foto no encontrada' });
-    if (photo.group_owner_id !== req.user.id)
+    if (!(await canManageGroup(sql, req.user.id, photo.group_id)))
       return res.status(403).json({ error: 'Sin permiso' });
 
     await deleteByPublicId(photo.public_id);
