@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { getDb }  from '../db.js';
 import { uid }    from '../uid.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { optionalAuth, requireAuth } from '../middleware/auth.js';
+import { requireGroupManage, requireTournamentManage } from '../middleware/access.js';
 
 const router = Router();
 
@@ -65,7 +66,7 @@ router.get('/group/:groupId', async (req, res, next) => {
 // POST /api/players/resolve
 // Body: { name, groupId, tournamentId? }
 // Acepta @username para vincular al usuario registrado y generar una invitación automática.
-router.post('/resolve', optionalAuth, async (req, res, next) => {
+router.post('/resolve', requireAuth, requireGroupManage, async (req, res, next) => {
   try {
     const { name, groupId, tournamentId } = req.body;
     if (!name?.trim())  return res.status(400).json({ error: 'name requerido' });
@@ -136,7 +137,7 @@ router.post('/resolve', optionalAuth, async (req, res, next) => {
 
 // DELETE /api/players/:playerId/tournament/:tournamentId
 // Elimina al jugador de una jornada específica (no del grupo completo)
-router.delete('/:playerId/tournament/:tournamentId', async (req, res, next) => {
+router.delete('/:playerId/tournament/:tournamentId', requireAuth, requireTournamentManage, async (req, res, next) => {
   try {
     const { playerId, tournamentId } = req.params;
     const sql = getDb();
@@ -149,7 +150,7 @@ router.delete('/:playerId/tournament/:tournamentId', async (req, res, next) => {
 });
 
 // DELETE /api/players/:playerId/group/:groupId
-router.delete('/:playerId/group/:groupId', async (req, res, next) => {
+router.delete('/:playerId/group/:groupId', requireAuth, requireGroupManage, async (req, res, next) => {
   try {
     const { playerId, groupId } = req.params;
     const sql = getDb();
@@ -164,7 +165,7 @@ router.delete('/:playerId/group/:groupId', async (req, res, next) => {
 // PATCH /api/players/:playerId
 // Renombrar un jugador. La colisión ahora se verifica solo dentro del mismo grupo.
 // Body: { name, groupId }
-router.patch('/:playerId', async (req, res, next) => {
+router.patch('/:playerId', requireAuth, requireGroupManage, async (req, res, next) => {
   try {
     const { playerId } = req.params;
     const { name, groupId } = req.body;

@@ -16,9 +16,11 @@ import readonlyRouter    from './routes/readonly.js';
 import authRouter        from './routes/auth.js';
 import invitationsRouter    from './routes/invitations.js';
 import joinRequestsRouter   from './routes/join-requests.js';
+import collaboratorsRouter  from './routes/collaborators.js';
 import subscriptionsRouter  from './routes/subscriptions.js';
 import photosRouter         from './routes/photos.js';
 import adminRouter          from './routes/admin.js';
+import inboundRouter        from './routes/inbound.js';
 import { getDb } from './db.js';
 
 const app  = express();
@@ -37,6 +39,11 @@ app.use(cors({
 
 app.use(morgan('dev'));
 app.use(cookieParser());
+
+// El webhook de Resend (inbound email) necesita el body crudo para verificar la
+// firma svix, así que su parser raw va ANTES del express.json() global.
+app.use('/api/emails/webhook', express.raw({ type: 'application/json' }));
+
 app.use(express.json());
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store');
@@ -58,6 +65,9 @@ app.use('/api/follows',        followsRouter);
 app.use('/api/notifications',  notificationsRouter);
 app.use('/api/subscriptions', subscriptionsRouter);
 app.use('/api/admin',         adminRouter);
+app.use('/api/emails',        inboundRouter);
+// Rutas de co-organizadores y transferencia (paths absolutos: /groups/:id/..., /invites/...)
+app.use('/api',               collaboratorsRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 

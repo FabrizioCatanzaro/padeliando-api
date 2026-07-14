@@ -276,6 +276,7 @@ router.get('/:id/events', async (req, res, next) => {
     const rows = await sql`
       SELECT
         t.id, t.name, t.format, t.mode, t.status, t.event_date, t.created_at,
+        (t.live_match IS NOT NULL) AS has_live,
         g.id AS group_id, g.name AS group_name,
         u.username AS owner_username, u.name AS owner_name, u.avatar_url AS owner_avatar_url,
         (SELECT COUNT(*)::int FROM tournament_players tp WHERE tp.tournament_id = t.id) AS players_count,
@@ -287,15 +288,13 @@ router.get('/:id/events', async (req, res, next) => {
       ORDER BY COALESCE(t.event_date, t.created_at::date) DESC
     `;
 
-    const toISODate = (v) =>
-      !v ? null : v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10);
-    const today = new Date().toISOString().slice(0, 10);
     const events = { upcoming: [], ongoing: [], past: [] };
     for (const t of rows) {
-      const ed = toISODate(t.event_date);
+      // Estados: finished / ongoing ('en curso') / upcoming ('próximamente').
+      // 'en curso' si hay un partido EN VIVO o ya se jugó algún partido (la fecha no importa).
       if (t.status === 'finished') events.past.push(t);
-      else if (ed && ed > today && (t.match_count ?? 0) === 0) events.upcoming.push(t);
-      else events.ongoing.push(t);
+      else if (t.has_live || (t.match_count ?? 0) > 0) events.ongoing.push(t);
+      else events.upcoming.push(t);
     }
     // upcoming en orden cronológico ascendente (lo más próximo primero)
     events.upcoming.reverse();

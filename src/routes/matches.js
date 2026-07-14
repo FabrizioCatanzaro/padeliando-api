@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { getDb }  from '../db.js';
 import { uid }    from '../uid.js';
- 
+import { requireAuth } from '../middleware/auth.js';
+import { requireTournamentManage, requireMatchManage } from '../middleware/access.js';
+
 const router = Router();
- 
+
 // POST /api/matches
-router.post('/', async (req, res, next) => {
+router.post('/', requireAuth, requireTournamentManage, async (req, res, next) => {
   try {
     const { tournamentId, team1, team2, score1, score2, playedAt, duration_seconds, sets, sets_format, court } = req.body;
 
@@ -36,7 +38,7 @@ router.post('/', async (req, res, next) => {
 });
  
 // PUT /api/matches/:id
-router.put('/:id', async (req, res, next) => {
+router.put('/:id', requireAuth, requireMatchManage, async (req, res, next) => {
   try {
     const { team1, team2, score1, score2, playedAt, duration_seconds, sets, sets_format, court } = req.body;
     const sql = getDb();
@@ -59,7 +61,7 @@ router.put('/:id', async (req, res, next) => {
 });
  
 // DELETE /api/matches/:id
-router.delete('/:id', async (req, res, next) => {
+router.delete('/:id', requireAuth, requireMatchManage, async (req, res, next) => {
   try {
     const sql = getDb();
     await sql`DELETE FROM matches WHERE id = ${req.params.id}`;

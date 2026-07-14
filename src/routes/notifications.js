@@ -28,12 +28,14 @@ router.get('/', requireAuth, async (req, res, next) => {
           EXISTS(SELECT 1 FROM user_follows WHERE follower_id = ${req.user.id} AND following_id = a.id)
         ELSE false END AS is_following_back,
         pi.status  AS invitation_status,
-        g.id       AS group_id,
-        g.name     AS group_name,
+        COALESCE(g.id, gci.id, got.id)     AS group_id,
+        COALESCE(g.name, gci.name, got.name) AS group_name,
         p.name     AS player_name,
         tjr.status        AS request_status,
         tour.id           AS tournament_id,
-        tour.name         AS tournament_name
+        tour.name         AS tournament_name,
+        ci.status  AS collab_status,
+        ot.status  AS transfer_status
       FROM notifications n
       LEFT JOIN users a ON a.id = n.actor_id
       LEFT JOIN player_invitations pi ON n.type = 'invitation' AND pi.id = n.entity_id
@@ -41,6 +43,10 @@ router.get('/', requireAuth, async (req, res, next) => {
       LEFT JOIN players p ON p.id = pi.player_id
       LEFT JOIN tournament_join_requests tjr ON n.type = 'join_request' AND tjr.id = n.entity_id
       LEFT JOIN tournaments tour ON tour.id = tjr.tournament_id
+      LEFT JOIN collaborator_invitations ci ON n.type = 'collab_invite' AND ci.id = n.entity_id
+      LEFT JOIN groups gci ON gci.id = ci.group_id
+      LEFT JOIN ownership_transfers ot ON n.type = 'ownership_transfer' AND ot.id = n.entity_id
+      LEFT JOIN groups got ON got.id = ot.group_id
       WHERE n.user_id = ${req.user.id}
       ORDER BY n.created_at DESC
       LIMIT ${limit} OFFSET ${offset}

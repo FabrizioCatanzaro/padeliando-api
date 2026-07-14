@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { getDb }  from '../db.js';
 import { uid }    from '../uid.js';
- 
+import { requireAuth } from '../middleware/auth.js';
+import { requireTournamentManage, requirePairManage } from '../middleware/access.js';
+
 const router = Router();
- 
+
 // POST /api/pairs
-router.post('/', async (req, res, next) => {
+router.post('/', requireAuth, requireTournamentManage, async (req, res, next) => {
   try {
     const { tournamentId, p1Id, p2Id } = req.body;
     if (!tournamentId || !p1Id || !p2Id) {
@@ -21,7 +23,7 @@ router.post('/', async (req, res, next) => {
 });
  
 // PUT /api/pairs/:id
-router.put('/:id', async (req, res, next) => {
+router.put('/:id', requireAuth, requirePairManage, async (req, res, next) => {
   try {
     const { p1Id, p2Id } = req.body;
     const sql = getDb();
@@ -35,7 +37,7 @@ router.put('/:id', async (req, res, next) => {
 });
  
 // DELETE /api/pairs/:id
-router.delete('/:id', async (req, res, next) => {
+router.delete('/:id', requireAuth, requirePairManage, async (req, res, next) => {
   try {
     const sql = getDb();
     await sql`DELETE FROM pairs WHERE id = ${req.params.id}`;

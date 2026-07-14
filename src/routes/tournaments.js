@@ -1,18 +1,21 @@
 import { Router } from 'express';
 import { getDb }  from '../db.js';
 import { uid }    from '../uid.js';
-import { optionalAuth } from '../middleware/auth.js';
+import { optionalAuth, requireAuth } from '../middleware/auth.js';
+import { requireGroupManage, requireTournamentManage } from '../middleware/access.js';
+import { canManageGroup } from '../lib/access.js';
 
 const router = Router();
 
 // GET /api/tournaments/:id
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', optionalAuth, async (req, res, next) => {
   try {
     const sql = getDb();
     const { id } = req.params;
 
     const [tournament] = await sql`
       SELECT t.*,
+             g.user_id       AS group_owner_id,
              c.name          AS club_name,
              c.location_name AS club_location_name,
              (EXISTS (
@@ -21,6 +24,7 @@ router.get('/:id', async (req, res, next) => {
                WHERE  g.id = t.group_id AND s.plan = 'premium' AND s.status = 'active'
              )) AS owner_is_premium
       FROM tournaments t
+      JOIN groups g ON g.id = t.group_id
       LEFT JOIN clubs c ON c.id = t.club_id
       WHERE t.id = ${id}
     `;
@@ -79,14 +83,21 @@ router.get('/:id', async (req, res, next) => {
       ...removedPlayers.map((p) => ({ ...p, removed: true })),
     ];
 
-    res.json({ ...tournament, players, pairs, matches });
+    // Permisos del solicitante (dueño de la categoría o co-organizador)
+    const viewerId = req.user?.id ?? null;
+    const is_owner = !!viewerId && tournament.group_owner_id === viewerId;
+    const can_manage = is_owner
+      ? true
+      : (viewerId ? (await canManageGroup(sql, viewerId, tournament.group_id)) === true : false);
+
+    res.json({ ...tournament, players, pairs, matches, is_owner, can_manage });
   } catch (err) { next(err); }
 });
 
 // POST /api/tournaments
 // Body: { groupId, name, mode, format, playerNames[], pairs?: [{p1Name,p2Name}] }
 // playerNames puede incluir entradas @username para vincular a usuarios registrados.
-router.post('/', optionalAuth, async (req, res, next) => {
+router.post('/', requireAuth, requireGroupManage, async (req, res, next) => {
   try {
     const {
       groupId, name, mode = 'free', format = 'liga',
@@ -228,7 +239,7 @@ router.post('/', optionalAuth, async (req, res, next) => {
 });
 
 // PATCH /api/tournaments/:id
-router.patch('/:id', async (req, res, next) => {
+router.patch('/:id', requireAuth, requireTournamentManage, async (req, res, next) => {
   try {
     const { id }           = req.params;
     const { name, status, mode, number_of_courts, club_id, event_date } = req.body;
@@ -257,7 +268,7 @@ router.patch('/:id', async (req, res, next) => {
 });
 
 // DELETE /api/tournaments/:id
-router.delete('/:id', async (req, res, next) => {
+router.delete('/:id', requireAuth, requireTournamentManage, async (req, res, next) => {
   try {
     const sql = getDb();
     await sql`DELETE FROM tournaments WHERE id = ${req.params.id}`;
@@ -266,7 +277,7 @@ router.delete('/:id', async (req, res, next) => {
 });
 
 // DELETE /api/tournaments/:id/matches  — reiniciar scores
-router.delete('/:id/matches', async (req, res, next) => {
+router.delete('/:id/matches', requireAuth, requireTournamentManage, async (req, res, next) => {
   try {
     const sql = getDb();
     await sql`DELETE FROM matches WHERE tournament_id = ${req.params.id}`;
@@ -278,7 +289,7 @@ router.delete('/:id/matches', async (req, res, next) => {
 });
 
 // PATCH /api/tournaments/:id/live
-router.patch('/:id/live', async (req, res, next) => {
+router.patch('/:id/live', requireAuth, requireTournamentManage, async (req, res, next) => {
   try {
     const { live_match } = req.body;
     const sql = getDb();
@@ -294,7 +305,7 @@ router.patch('/:id/live', async (req, res, next) => {
 // Genera un calendario aleatorio para la fase previa del Americano.
 // Cada pareja juega exactamente 2 partidos contra rivales distintos.
 // No crea partidos en BD — devuelve el calendario propuesto.
-router.post('/:id/schedule', async (req, res, next) => {
+router.post('/:id/schedule', requireAuth, requireTournamentManage, async (req, res, next) => {
   try {
     const sql = getDb();
     const [tournament] = await sql`SELECT * FROM tournaments WHERE id = ${req.params.id}`;
@@ -321,7 +332,7 @@ router.post('/:id/schedule', async (req, res, next) => {
 // POST /api/tournaments/:id/bracket
 // Genera el cuadro eliminatorio a partir de la tabla de la fase previa.
 // Guarda el bracket en tournaments.bracket y lo retorna.
-router.post('/:id/bracket', async (req, res, next) => {
+router.post('/:id/bracket', requireAuth, requireTournamentManage, async (req, res, next) => {
   try {
     const sql = getDb();
     const [tournament] = await sql`SELECT * FROM tournaments WHERE id = ${req.params.id}`;
@@ -362,7 +373,7 @@ router.post('/:id/bracket', async (req, res, next) => {
 
 // PATCH /api/tournaments/:id/bracket  — reemplaza el bracket completo (reorganizar cruces)
 // Body: { bracket }
-router.patch('/:id/bracket', async (req, res, next) => {
+router.patch('/:id/bracket', requireAuth, requireTournamentManage, async (req, res, next) => {
   try {
     const { bracket } = req.body;
     if (!bracket) return res.status(400).json({ error: 'bracket requerido' });
@@ -379,7 +390,7 @@ router.patch('/:id/bracket', async (req, res, next) => {
 // PATCH /api/tournaments/:id/bracket/:matchId
 // Registra el resultado de un partido del bracket y propaga el ganador al siguiente round.
 // Body: { score1, score2, duration_seconds, court }
-router.patch('/:id/bracket/:matchId', async (req, res, next) => {
+router.patch('/:id/bracket/:matchId', requireAuth, requireTournamentManage, async (req, res, next) => {
   try {
     const { score1, score2, duration_seconds, court } = req.body;
     if (score1 == null || score2 == null) return res.status(400).json({ error: 'score1 y score2 requeridos' });
