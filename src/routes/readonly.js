@@ -11,7 +11,9 @@ router.get('/:tournamentId', async (req, res, next) => {
  
     const [tournament] = await sql`
       SELECT t.*, u.username AS owner_username,
+             g.name          AS group_name,
              c.name          AS club_name,
+             c.photo_url     AS club_photo_url,
              c.location_name AS club_location_name
       FROM   tournaments t
       JOIN   groups g ON g.id = t.group_id
@@ -69,11 +71,13 @@ router.get('/:tournamentId', async (req, res, next) => {
       status:         tournament.status,
       live_match:     tournament.live_match ?? null,
       group_id:       tournament.group_id,
+      group_name:     tournament.group_name ?? null,
       owner_username: tournament.owner_username,
       created_at:     tournament.created_at,
       event_date:          tournament.event_date ?? null,
       club_id:             tournament.club_id ?? null,
       club_name:           tournament.club_name ?? null,
+      club_photo_url:      tournament.club_photo_url ?? null,
       club_location_name:  tournament.club_location_name ?? null,
       bracket:        tournament.bracket ?? null,
       players,

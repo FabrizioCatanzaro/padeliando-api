@@ -16,7 +16,9 @@ router.get('/:id', optionalAuth, async (req, res, next) => {
     const [tournament] = await sql`
       SELECT t.*,
              g.user_id       AS group_owner_id,
+             g.name          AS group_name,
              c.name          AS club_name,
+             c.photo_url     AS club_photo_url,
              c.location_name AS club_location_name,
              (EXISTS (
                SELECT 1 FROM subscriptions s
