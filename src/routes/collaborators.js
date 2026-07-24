@@ -1,13 +1,14 @@
 import { Router } from 'express';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { getDb } from '../db.js';
 import { uid }   from '../uid.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
-const genToken = () => randomBytes(24).toString('hex');
-const linkUrl  = (token) => `${process.env.FRONTEND_URL ?? ''}/invitacion/${token}`;
+const genToken  = () => randomBytes(24).toString('hex');
+const hashToken = (token) => createHash('sha256').update(token).digest('hex');
+const linkUrl   = (token) => `${process.env.FRONTEND_URL ?? ''}/invitacion/${token}`;
 
 // Busca un usuario por @username o email. Devuelve null si no existe.
 async function findUser(sql, identifier) {
@@ -56,9 +57,9 @@ router.post('/groups/:groupId/collaborators/invites', requireAuth, async (req, r
     if (link) {
       const token = genToken();
       const [invitation] = await sql`
-        INSERT INTO collaborator_invitations (id, group_id, invited_by, token)
-        VALUES (${uid()}, ${groupId}, ${req.user.id}, ${token})
-        RETURNING id, token
+        INSERT INTO collaborator_invitations (id, group_id, invited_by, token_hash)
+        VALUES (${uid()}, ${groupId}, ${req.user.id}, ${hashToken(token)})
+        RETURNING id
       `;
       return res.status(201).json({ invitation, url: linkUrl(token) });
     }
@@ -166,9 +167,9 @@ router.post('/groups/:groupId/transfer', requireAuth, async (req, res, next) => 
     if (link) {
       const token = genToken();
       const [transfer] = await sql`
-        INSERT INTO ownership_transfers (id, group_id, from_user_id, token)
-        VALUES (${uid()}, ${groupId}, ${req.user.id}, ${token})
-        RETURNING id, token
+        INSERT INTO ownership_transfers (id, group_id, from_user_id, token_hash)
+        VALUES (${uid()}, ${groupId}, ${req.user.id}, ${hashToken(token)})
+        RETURNING id
       `;
       return res.status(201).json({ transfer, url: linkUrl(token) });
     }
@@ -252,7 +253,7 @@ router.post('/invites/resolve', requireAuth, async (req, res, next) => {
       FROM   collaborator_invitations ci
       JOIN   groups g ON g.id = ci.group_id
       JOIN   users  u ON u.id = ci.invited_by
-      WHERE  ci.token = ${token} AND ci.status = 'pending'
+      WHERE  ci.token_hash = ${hashToken(token)} AND ci.status = 'pending'
     `;
     if (ci) return res.json({ kind: 'collaborator', group: { id: ci.group_id, name: ci.group_name }, from: { name: ci.from_name, username: ci.from_username } });
 
@@ -262,7 +263,7 @@ router.post('/invites/resolve', requireAuth, async (req, res, next) => {
       FROM   ownership_transfers ot
       JOIN   groups g ON g.id = ot.group_id
       JOIN   users  u ON u.id = ot.from_user_id
-      WHERE  ot.token = ${token} AND ot.status = 'pending'
+      WHERE  ot.token_hash = ${hashToken(token)} AND ot.status = 'pending'
     `;
     if (ot) return res.json({ kind: 'transfer', group: { id: ot.group_id, name: ot.group_name }, from: { name: ot.from_name, username: ot.from_username } });
 
@@ -278,7 +279,7 @@ router.post('/invites/accept', requireAuth, async (req, res, next) => {
     const sql = getDb();
 
     // Co-organizador
-    const [ci] = await sql`SELECT * FROM collaborator_invitations WHERE token = ${token} AND status = 'pending'`;
+    const [ci] = await sql`SELECT * FROM collaborator_invitations WHERE token_hash = ${hashToken(token)} AND status = 'pending'`;
     if (ci) {
       const [group] = await sql`SELECT user_id FROM groups WHERE id = ${ci.group_id}`;
       if (group?.user_id === req.user.id) return res.status(409).json({ error: 'Ya sos el dueño de esta categoría' });
@@ -290,7 +291,7 @@ router.post('/invites/accept', requireAuth, async (req, res, next) => {
     }
 
     // Transferencia
-    const [ot] = await sql`SELECT * FROM ownership_transfers WHERE token = ${token} AND status = 'pending'`;
+    const [ot] = await sql`SELECT * FROM ownership_transfers WHERE token_hash = ${hashToken(token)} AND status = 'pending'`;
     if (ot) {
       if (ot.from_user_id === req.user.id) return res.status(409).json({ error: 'No podés transferirte la categoría a vos mismo' });
       const [group] = await sql`SELECT user_id FROM groups WHERE id = ${ot.group_id}`;

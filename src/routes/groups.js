@@ -612,7 +612,7 @@ router.get('/:groupId', optionalAuth, async (req, res, next) => {
     let pending_transfer = null;
     if (is_owner) {
       const [pt] = await sql`
-        SELECT ot.id, ot.token, ot.created_at,
+        SELECT ot.id, ot.created_at,
                u.name AS to_name, u.username AS to_username
         FROM   ownership_transfers ot
         LEFT   JOIN users u ON u.id = ot.to_user_id
