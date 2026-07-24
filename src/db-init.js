@@ -7,7 +7,9 @@ import { Pool } from '@neondatabase/serverless';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const schema    = readFileSync(join(__dirname, 'schema.sql'), 'utf8');
  
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Las migraciones necesitan permisos DDL: usar el rol owner (DATABASE_URL_ADMIN).
+// DATABASE_URL apunta al rol de app de minimo privilegio (solo DML) en produccion.
+const pool = new Pool({ connectionString: process.env.DATABASE_URL_ADMIN || process.env.DATABASE_URL });
  
 try {
   await pool.query(schema);

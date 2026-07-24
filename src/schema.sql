@@ -201,7 +201,7 @@ CREATE TABLE IF NOT EXISTS collaborator_invitations (
   invited_by         TEXT NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
   invited_identifier TEXT,                 -- el @username/email ingresado (NULL si es link)
   invited_user_id    TEXT REFERENCES users(id) ON DELETE CASCADE, -- NULL si es link
-  token              TEXT UNIQUE,          -- para invitación por link (NULL si es directa)
+  token_hash         TEXT UNIQUE,          -- hash SHA-256 del token de link (NULL si es directa)
   status             TEXT NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending','accepted','rejected','cancelled')),
   created_at         TIMESTAMPTZ DEFAULT NOW()
@@ -213,7 +213,7 @@ CREATE TABLE IF NOT EXISTS ownership_transfers (
   group_id      TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
   from_user_id  TEXT NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
   to_user_id    TEXT REFERENCES users(id) ON DELETE CASCADE, -- NULL si es link
-  token         TEXT UNIQUE,
+  token_hash    TEXT UNIQUE,              -- hash SHA-256 del token de link
   status        TEXT NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending','accepted','rejected','cancelled')),
   created_at    TIMESTAMPTZ DEFAULT NOW()
